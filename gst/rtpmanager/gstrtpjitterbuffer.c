@@ -131,7 +131,7 @@ enum
 #define DEFAULT_LATENCY_MS          200
 #define DEFAULT_DROP_ON_LATENCY     FALSE
 #define DEFAULT_TS_OFFSET           0
-#define DEFAULT_DO_LOST             FALSE
+#define DEFAULT_DO_LOST             TRUE
 #define DEFAULT_MODE                RTP_JITTER_BUFFER_MODE_SLAVE
 #define DEFAULT_PERCENT             0
 #define DEFAULT_DO_RETRANSMISSION   FALSE
