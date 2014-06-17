@@ -359,11 +359,6 @@ static GstStaticPadTemplate gst_rtp_h263_pay_src_template =
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("application/x-rtp, "
         "media = (string) \"video\", "
-        "payload = (int) " GST_RTP_PAYLOAD_H263_STRING ", "
-        "clock-rate = (int) 90000, " "encoding-name = (string) \"H263\"; "
-        "application/x-rtp, "
-        "media = (string) \"video\", "
-        "payload = (int) " GST_RTP_PAYLOAD_DYNAMIC_STRING ", "
         "clock-rate = (int) 90000, " "encoding-name = (string) \"H263\"")
     );
 
@@ -440,6 +435,8 @@ gst_rtp_h263_pay_class_init (GstRtpH263PayClass * klass)
 static void
 gst_rtp_h263_pay_init (GstRtpH263Pay * rtph263pay)
 {
+  GstRTPBasePayload *payload = GST_RTP_BASE_PAYLOAD (rtph263pay);
+  payload->pt = GST_RTP_PAYLOAD_H263;
   rtph263pay->adapter = gst_adapter_new ();
 
   rtph263pay->prop_payload_mode = DEFAULT_MODE_A;
@@ -463,7 +460,6 @@ gst_rtp_h263_pay_setcaps (GstRTPBasePayload * payload, GstCaps * caps)
 {
   gboolean res;
 
-  payload->pt = GST_RTP_PAYLOAD_H263;
   gst_rtp_base_payload_set_options (payload, "video", TRUE, "H263", 90000);
   res = gst_rtp_base_payload_set_outcaps (payload, NULL);
 
