@@ -81,8 +81,9 @@ GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("application/x-rtp, "
-        "payload = (int) " GST_RTP_PAYLOAD_DYNAMIC_STRING ","
-        "clock-rate = (int) 90000, encoding-name = (string) \"VP8-DRAFT-IETF-01\""));
+        "clock-rate = (int) 90000,"
+        "media = (string) \"video\","
+        "encoding-name = (string) \"VP8\""));
 
 static GstStaticPadTemplate gst_rtp_vp8_pay_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
@@ -510,7 +511,7 @@ static gboolean
 gst_rtp_vp8_pay_set_caps (GstRTPBasePayload * payload, GstCaps * caps)
 {
   gst_rtp_base_payload_set_options (payload, "video", TRUE,
-      "VP8-DRAFT-IETF-01", 90000);
+      "VP8", 90000);
   return gst_rtp_base_payload_set_outcaps (payload, NULL);
 }
 
