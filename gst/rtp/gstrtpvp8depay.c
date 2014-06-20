@@ -209,7 +209,6 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
 
         snprintf (profile_str, 3, "%u", profile);
         srccaps = gst_caps_new_simple ("video/x-vp8",
-            "framerate", GST_TYPE_FRACTION, 0, 1,
             "height", G_TYPE_INT, height,
             "width", G_TYPE_INT, width,
             "profile", G_TYPE_STRING, profile_str, NULL);
