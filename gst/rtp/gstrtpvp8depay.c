@@ -200,9 +200,7 @@ too_small:
 static gboolean
 gst_rtp_vp8_depay_set_caps (GstRTPBaseDepayload * depayload, GstCaps * caps)
 {
-  GstCaps *srccaps = gst_caps_new_simple ("video/x-vp8",
-      "framerate", GST_TYPE_FRACTION, 0, 1,
-      NULL);
+  GstCaps *srccaps = gst_caps_new_simple ("video/x-vp8", NULL);
 
   gst_pad_set_caps (GST_RTP_BASE_DEPAYLOAD_SRCPAD (depayload), srccaps);
   gst_caps_unref (srccaps);
