@@ -697,6 +697,9 @@ gst_vpx_enc_init (GstVPXEnc * gst_vpx_enc)
 
   gst_vpx_enc->cfg.g_profile = DEFAULT_PROFILE;
 
+  gst_video_encoder_set_keyframe_rate_limit (GST_VIDEO_ENCODER (gst_vpx_enc),
+      500 * GST_MSECOND);
+
   g_mutex_init (&gst_vpx_enc->encoder_lock);
 }
 
