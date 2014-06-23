@@ -800,6 +800,9 @@ gst_vp8_enc_init (GstVP8Enc * gst_vp8_enc)
 
   gst_vp8_enc->cfg.g_profile = DEFAULT_PROFILE;
 
+  gst_video_encoder_set_keyframe_rate_limit (GST_VIDEO_ENCODER (gst_vp8_enc),
+      500 * GST_MSECOND);
+
   g_mutex_init (&gst_vp8_enc->encoder_lock);
 }
 
