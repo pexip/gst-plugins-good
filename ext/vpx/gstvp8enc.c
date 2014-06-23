@@ -1939,8 +1939,6 @@ gst_vp8_enc_handle_frame (GstVideoEncoder * video_encoder,
 
   encoder = GST_VP8_ENC (video_encoder);
 
-  encoder->n_frames++;
-
   GST_DEBUG_OBJECT (video_encoder, "size %d %d",
       GST_VIDEO_INFO_WIDTH (&encoder->input_state->info),
       GST_VIDEO_INFO_HEIGHT (&encoder->input_state->info));
@@ -1971,6 +1969,7 @@ gst_vp8_enc_handle_frame (GstVideoEncoder * video_encoder,
     return FALSE;
   }
   gst_video_codec_frame_unref (frame);
+  encoder->n_frames++;
   return gst_vp8_enc_process (encoder);
 }
 
