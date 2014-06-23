@@ -594,12 +594,12 @@ gst_vpx_dec_open_codec (GstVPXDec * dec, GstVideoCodecFrame * frame)
   gst_buffer_unmap (frame->input_buffer, &minfo);
 
   if (status != VPX_CODEC_OK) {
-    GST_WARNING_OBJECT (dec, "VPX preprocessing error: %s",
+    GST_INFO_OBJECT (dec, "VPX preprocessing error: %s",
         gst_vpx_error_name (status));
     return GST_FLOW_CUSTOM_SUCCESS_1;
   }
   if (!stream_info.is_kf) {
-    GST_WARNING_OBJECT (dec, "No keyframe, skipping");
+    GST_INFO_OBJECT (dec, "No keyframe, skipping");
     return GST_FLOW_CUSTOM_SUCCESS_1;
   }
 
@@ -681,6 +681,8 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   if (!dec->decoder_inited) {
     ret = vpxclass->open_codec (dec, frame);
     if (ret == GST_FLOW_CUSTOM_SUCCESS_1) {
+      gst_video_decoder_report_decode_error (decoder, frame->pts,
+          GST_VIDEO_DECODER_BITSTREAM_FAULT);
       gst_video_decoder_drop_frame (decoder, frame);
       return GST_FLOW_OK;
     } else if (ret != GST_FLOW_OK) {
@@ -712,6 +714,8 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
   if (status) {
     GST_VIDEO_DECODER_ERROR (decoder, 1, LIBRARY, ENCODE,
         ("Failed to decode frame"), ("%s", gst_vpx_error_name (status)), ret);
+    gst_video_decoder_report_decode_error (decoder, frame->pts,
+        GST_VIDEO_DECODER_BITSTREAM_FAULT);
     gst_video_codec_frame_unref (frame);
     return ret;
   }
