@@ -548,6 +548,17 @@ gst_vp8_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
           (double) -deadline / GST_SECOND);
       gst_video_decoder_drop_frame (decoder, frame);
     } else {
+      /* Make sure output resolution is correct */
+      if (GST_VIDEO_INFO_WIDTH (&dec->output_state->info) != img->d_w ||
+          GST_VIDEO_INFO_HEIGHT (&dec->output_state->info) != img->d_h) {
+        GST_INFO_OBJECT (dec, "Changing resolution %ux%u -> %ux%u",
+            GST_VIDEO_INFO_WIDTH (&dec->output_state->info),
+            GST_VIDEO_INFO_HEIGHT (&dec->output_state->info), img->d_w, img->d_h);
+        gst_video_codec_state_unref (dec->output_state);
+        dec->output_state =
+            gst_video_decoder_set_output_state (GST_VIDEO_DECODER (dec),
+            GST_VIDEO_FORMAT_I420, img->d_w, img->d_h, dec->input_state);
+      }
       ret = gst_video_decoder_allocate_output_frame (decoder, frame);
 
       if (ret == GST_FLOW_OK) {
