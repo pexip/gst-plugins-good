@@ -82,6 +82,7 @@ enum
   PROP_NUM_ACTIVE_SOURCES,
   PROP_SOURCES,
   PROP_FAVOR_NEW,
+  PROP_RTCP_RSIZE,
   PROP_RTCP_MIN_INTERVAL,
   PROP_RTCP_FEEDBACK_RETENTION_WINDOW,
   PROP_RTCP_IMMEDIATE_FEEDBACK_THRESHOLD,
@@ -409,6 +410,11 @@ rtp_session_class_init (RTPSessionClass * klass)
           "Resolve SSRC conflict in favor of new sources", FALSE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_RTCP_RSIZE,
+      g_param_spec_boolean ("rtcp-rsize", "RTCP reduced size",
+          "Enable reduced size RTCP packets", FALSE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class, PROP_RTCP_MIN_INTERVAL,
       g_param_spec_uint64 ("rtcp-min-interval", "Minimum RTCP interval",
           "Minimum interval between Regular RTCP packet (in ns)",
@@ -644,6 +650,9 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_FAVOR_NEW:
       sess->favor_new = g_value_get_boolean (value);
       break;
+    case PROP_RTCP_RSIZE:
+      sess->rtcp_rsize = g_value_get_boolean (value);
+      break;
     case PROP_RTCP_MIN_INTERVAL:
       rtp_stats_set_min_interval (&sess->stats,
           (gdouble) g_value_get_uint64 (value) / GST_SECOND);
@@ -711,6 +720,9 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_FAVOR_NEW:
       g_value_set_boolean (value, sess->favor_new);
+      break;
+    case PROP_RTCP_RSIZE:
+      g_value_set_boolean (value, sess->rtcp_rsize);
       break;
     case PROP_RTCP_MIN_INTERVAL:
       g_value_set_uint64 (value, sess->stats.min_interval * GST_SECOND);
@@ -2542,8 +2554,13 @@ rtp_session_process_rtcp (RTPSession * sess, GstBuffer * buffer,
   g_return_val_if_fail (RTP_IS_SESSION (sess), GST_FLOW_ERROR);
   g_return_val_if_fail (GST_IS_BUFFER (buffer), GST_FLOW_ERROR);
 
-  if (!gst_rtcp_buffer_validate (buffer))
-    goto invalid_packet;
+  if (!sess->rtcp_rsize) {
+    if (!gst_rtcp_buffer_validate (buffer))
+      goto invalid_packet;
+  } else {
+    if (!gst_rtcp_buffer_validate_rsize (buffer))
+      goto invalid_packet;
+  }
 
   GST_DEBUG ("received RTCP packet");
 

@@ -263,6 +263,7 @@ struct _RTPSession {
   RTPSessionStats bye_stats;
 
   gboolean      favor_new;
+  gboolean      rtcp_rsize;
   GstClockTime  rtcp_feedback_retention_window;
   guint         rtcp_immediate_feedback_threshold;
 
