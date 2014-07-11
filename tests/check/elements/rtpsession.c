@@ -34,7 +34,7 @@ static const guint payload_type = 0;
 typedef struct
 {
   GstElement *session;
-  GstPad *src, *rtcp_sink, *rtpsrc;
+  GstPad *src, *rtcp_src, *sink, *rtcp_sink;
   GstClock *clock;
   GAsyncQueue *rtcp_queue;
 } TestData;
@@ -102,11 +102,14 @@ destroy_testharness (TestData * data)
   gst_object_unref (data->src);
   data->src = NULL;
 
+  gst_object_unref (data->rtcp_src);
+  data->rtcp_src = NULL;
+
+  gst_object_unref (data->sink);
+  data->sink = NULL;
+
   gst_object_unref (data->rtcp_sink);
   data->rtcp_sink = NULL;
-
-  gst_object_unref (data->rtpsrc);
-  data->rtpsrc = NULL;
 
   gst_object_unref (data->clock);
   data->clock = NULL;
@@ -118,7 +121,7 @@ destroy_testharness (TestData * data)
 static void
 setup_testharness (TestData * data, gboolean session_as_sender)
 {
-  GstPad *rtp_sink_pad, *rtcp_src_pad, *rtp_src_pad;
+  GstPad *rtp_sink_pad, *rtcp_sink_pad, *rtp_src_pad, *rtcp_src_pad;
   GstSegment seg;
   GstMiniObject *obj;
   GstCaps *caps;
@@ -149,16 +152,23 @@ setup_testharness (TestData * data, gboolean session_as_sender)
   g_assert_cmpint (gst_pad_link (data->src, rtp_sink_pad), ==, GST_PAD_LINK_OK);
   gst_object_unref (rtp_sink_pad);
 
-  data->rtpsrc = gst_pad_new ("sink", GST_PAD_SINK);
-  g_assert (data->rtpsrc);
+  data->rtcp_src = gst_pad_new ("src", GST_PAD_SRC);
+  g_assert (data->rtcp_src);
+  rtcp_sink_pad = gst_element_get_request_pad (data->session, "recv_rtcp_sink");
+  g_assert (rtcp_sink_pad);
+  g_assert_cmpint (gst_pad_link (data->rtcp_src, rtcp_sink_pad), ==, GST_PAD_LINK_OK);
+  gst_object_unref (rtcp_sink_pad);
+
+  /* link in the test sink-pad */
+  data->sink = gst_pad_new ("sink", GST_PAD_SINK);
+  g_assert (data->sink);
   rtp_src_pad = gst_element_get_static_pad (data->session,
       session_as_sender ? "send_rtp_src" : "recv_rtp_src");
   g_assert (rtp_src_pad);
-  g_assert_cmpint (gst_pad_link (rtp_src_pad, data->rtpsrc), ==,
+  g_assert_cmpint (gst_pad_link (rtp_src_pad, data->sink), ==,
       GST_PAD_LINK_OK);
   gst_object_unref (rtp_src_pad);
 
-  /* link in the test sink-pad */
   data->rtcp_sink = gst_pad_new ("sink", GST_PAD_SINK);
   g_assert (data->rtcp_sink);
   gst_pad_set_element_private (data->rtcp_sink, data);
@@ -172,12 +182,19 @@ setup_testharness (TestData * data, gboolean session_as_sender)
   gst_object_unref (rtcp_src_pad);
 
   g_assert (gst_pad_set_active (data->src, TRUE));
+  g_assert (gst_pad_set_active (data->rtcp_src, TRUE));
   g_assert (gst_pad_set_active (data->rtcp_sink, TRUE));
 
   gst_segment_init (&seg, GST_FORMAT_TIME);
   gst_pad_push_event (data->src, gst_event_new_stream_start ("stream0"));
   gst_pad_set_caps (data->src, caps);
   gst_pad_push_event (data->src, gst_event_new_segment (&seg));
+  gst_caps_unref (caps);
+
+  caps = gst_caps_new_empty_simple ("application/x-rtcp");
+  gst_pad_push_event (data->rtcp_src, gst_event_new_stream_start ("stream0"));
+  gst_pad_set_caps (data->rtcp_src, caps);
+  gst_pad_push_event (data->rtcp_src, gst_event_new_segment (&seg));
   gst_caps_unref (caps);
 
   while ((obj = g_async_queue_try_pop (data->rtcp_queue)))
@@ -576,6 +593,35 @@ GST_START_TEST (test_internal_sources_timeout)
 
 GST_END_TEST;
 
+GST_START_TEST (test_illegal_rtcp_fb_packet)
+{
+  TestData data;
+  GObject *internal_session;
+  GstBuffer *buf;
+  /* Zero length RTCP feedback packet (reduced size) */
+  const guint8 rtcp_zero_fb_pkt[] = { 0x8f, 0xce, 0x00, 0x00 };
+
+  setup_testharness (&data, TRUE);
+  g_object_get (data.session, "internal-session", &internal_session, NULL);
+  g_object_set (internal_session,
+      "internal-ssrc", 0xDEADBEEF,
+      "rtcp-rsize", TRUE,
+      NULL);
+
+  buf = gst_buffer_new_and_alloc (sizeof (rtcp_zero_fb_pkt));
+  gst_buffer_fill (buf, 0, rtcp_zero_fb_pkt, sizeof (rtcp_zero_fb_pkt));
+  GST_BUFFER_DTS (buf) = GST_BUFFER_PTS (buf) = G_GUINT64_CONSTANT (0);
+
+  /* Push the packet, this did previously crash because length of packet was
+   * never validated. */
+  fail_unless (gst_pad_push (data.rtcp_src, buf) == GST_FLOW_OK);
+
+  g_object_unref (internal_session);
+  destroy_testharness (&data);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -586,6 +632,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_multiple_ssrc_rr);
   tcase_add_test (tc_chain, test_multiple_senders_roundrobin_rbs);
   tcase_add_test (tc_chain, test_internal_sources_timeout);
+  tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet);
 
   return s;
 }
