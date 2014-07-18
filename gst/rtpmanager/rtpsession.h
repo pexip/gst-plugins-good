@@ -219,6 +219,7 @@ struct _RTPSession {
   GstStructure *sdes;
 
   guint         probation;
+  gboolean      ssrc_collision_detection;
 
   GstRTPProfile rtp_profile;
 
