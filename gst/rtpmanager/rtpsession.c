@@ -1597,7 +1597,7 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     if (rtp)
       g_object_set (source, "probation", sess->probation, NULL);
     else
-      g_object_set (source, "probation", 0, NULL);
+      g_object_set (source, "probation", RTP_NO_PROBATION, NULL);
 
     /* store from address, if any */
     if (pinfo->address) {
@@ -1621,7 +1621,7 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* Receiving RTCP packets of an SSRC is a strong indication that we
      * are dealing with a valid source. */
     if (!rtp)
-      g_object_set (source, "probation", 0, NULL);
+      g_object_set (source, "probation", RTP_NO_PROBATION, NULL);
   }
   /* update last activity */
   source->last_activity = pinfo->current_time;
