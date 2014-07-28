@@ -46,7 +46,7 @@ GST_STATIC_PAD_TEMPLATE ("src",
     GST_STATIC_CAPS ("application/x-rtp, "
         "media = (string) \"audio\", "
         "encoding-name = (string) \"G722\", "
-        "payload = (int) " GST_RTP_PAYLOAD_G722_STRING ", "
+        "payload = (int) " GST_RTP_PAYLOAD_DYNAMIC_STRING ", "
         "clock-rate = (int) 8000")
     );
 
