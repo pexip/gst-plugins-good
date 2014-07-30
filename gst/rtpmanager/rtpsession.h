@@ -304,12 +304,16 @@ struct _RTPSessionClass {
   void (*on_ssrc_validated) (RTPSession *sess, RTPSource *source);
   void (*on_ssrc_active)    (RTPSession *sess, RTPSource *source);
   void (*on_ssrc_sdes)      (RTPSession *sess, RTPSource *source);
+  void (*on_ssrc_pse)       (RTPSession *sess, RTPSource *source,
+      guint type, GstBuffer *pse, guint rb_count);
   void (*on_bye_ssrc)       (RTPSession *sess, RTPSource *source);
   void (*on_bye_timeout)    (RTPSession *sess, RTPSource *source);
   void (*on_timeout)        (RTPSession *sess, RTPSource *source);
   void (*on_sender_timeout) (RTPSession *sess, RTPSource *source);
   gboolean (*on_sending_rtcp) (RTPSession *sess, GstBuffer *buffer,
       gboolean early);
+  void (*on_creating_srrr)  (RTPSession *sess, guint type, RTPSource *source,
+      GstRTCPPacket * packet);
   void (*on_feedback_rtcp)  (RTPSession *sess, guint type, guint fbtype,
       guint sender_ssrc, guint media_ssrc, GstBuffer *fci);
   gboolean (*send_rtcp)     (RTPSession *sess, GstClockTime max_delay);
