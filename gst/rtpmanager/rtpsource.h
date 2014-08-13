@@ -34,6 +34,24 @@
 
 #define RTP_SEQ_MOD          (1 << 16)
 
+/**
+ * RTPKeyUnitType:
+ * @RTP_KEY_UNIT_NONE: No key unit method set.
+ * @RTP_KEY_UNIT_FIR:  Full Intra Request mehtod.
+ * @RTP_KEY_UNIT_PLI:  Picture Loss Indication mehtod.
+ * @RTP_KEY_UNIT_XPLI: Microsoft x-pli method.
+ *
+ * Key unit request types.
+ */
+typedef enum
+{
+  RTP_KEY_UNIT_NONE = -1,
+  RTP_KEY_UNIT_FIR = 0,
+  RTP_KEY_UNIT_PLI,
+  RTP_KEY_UNIT_XPLI,
+  RTP_KEY_UNIT_LAST
+} RTPKeyUnitType;
+
 typedef struct _RTPSource RTPSource;
 typedef struct _RTPSourceClass RTPSourceClass;
 
@@ -185,10 +203,15 @@ struct _RTPSource {
 
   GQueue        *retained_feedback;
 
-  gboolean     send_pli;
-  gboolean     send_fir;
-  guint8       current_send_fir_seqnum;
-  gint         last_fir_count;
+  RTPKeyUnitType key_unit_type;
+  guint8         current_send_fir_seqnum;
+  gint           last_fir_count;
+  guint16        current_send_xpli_reqid;
+  guint64        current_send_xpli_sfr;
+
+  gboolean       recv_xpli;
+  gint           last_recv_xpli_reqid;
+  guint64        last_recv_xpli_sfr;
 
   gboolean     send_nack;
   GArray      *nacks;
