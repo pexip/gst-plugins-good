@@ -390,10 +390,11 @@ gboolean        rtp_session_request_early_rtcp     (RTPSession * sess, GstClockT
                                                     GstClockTime max_delay);
 
 /* Notify session of a request for a new key unit */
-gboolean        rtp_session_request_key_unit       (RTPSession * sess,
-                                                    guint32 ssrc,
-                                                    gboolean fir,
+gboolean        rtp_session_request_fir            (RTPSession * sess, guint32 ssrc,
                                                     gint count);
+gboolean        rtp_session_request_pli            (RTPSession * sess, guint32 ssrc);
+gboolean        rtp_session_request_xpli           (RTPSession * sess, guint32 ssrc,
+                                                    gint reqid, guint64 sfr);
 gboolean        rtp_session_request_nack           (RTPSession * sess,
                                                     guint32 ssrc,
                                                     guint16 seqnum,
