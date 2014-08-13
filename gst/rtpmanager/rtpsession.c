@@ -2652,7 +2652,8 @@ rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
 
 static void
 rtp_session_process_pli (RTPSession * sess, guint32 sender_ssrc,
-    guint32 media_ssrc, GstClockTime current_time)
+    guint32 media_ssrc, guint8 * fci_data, guint fci_length,
+    GstClockTime current_time)
 {
   RTPSource *src;
 
@@ -2663,7 +2664,23 @@ rtp_session_process_pli (RTPSession * sess, guint32 sender_ssrc,
   if (src == NULL)
     return;
 
-  rtp_session_request_local_key_unit (sess, src, FALSE, current_time);
+  if (!src->recv_xpli) {
+    rtp_session_request_local_key_unit (sess, src, FALSE, current_time);
+  } else if (fci_length == 3 * sizeof (guint32)) {
+    guint16 reqid = GST_READ_UINT16_BE (&fci_data[0]);
+    guint64 sfr = GST_READ_UINT64_LE (&fci_data[sizeof (guint32)]);
+
+    if (G_UNLIKELY ((gint)reqid == src->last_recv_xpli_reqid)) {
+      GST_DEBUG ("Ignore x-PLI request (id %u) from sender %08x for %08x",
+          reqid, sender_ssrc, media_ssrc);
+      return;
+    }
+
+    if (rtp_session_request_local_key_unit (sess, src, FALSE, current_time)) {
+      src->last_recv_xpli_reqid = (gint)reqid;
+      src->last_recv_xpli_sfr = sfr;
+    }
+  }
 }
 
 static void
@@ -2779,8 +2796,8 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
   fci_data = gst_rtcp_packet_fb_get_fci (packet);
   fci_length = gst_rtcp_packet_fb_get_fci_length (packet) * sizeof (guint32);
 
-  GST_DEBUG ("received feedback %d:%d from %08X about %08X with FCI of "
-      "length %d", type, fbtype, sender_ssrc, media_ssrc, fci_length);
+  GST_DEBUG ("received feedback %d:%d from %08X about %08X (%p) with FCI of "
+      "length %d", type, fbtype, sender_ssrc, media_ssrc, src, fci_length);
 
   if (g_signal_has_handler_pending (sess,
           rtp_session_signals[SIGNAL_ON_FEEDBACK_RTCP], 0, TRUE)) {
@@ -2816,7 +2833,7 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
             if (src)
               src->stats.recv_pli_count++;
             rtp_session_process_pli (sess, sender_ssrc, media_ssrc,
-                current_time);
+                fci_data, fci_length, current_time);
             break;
           case GST_RTCP_PSFB_TYPE_FIR:
             if (src)
@@ -3458,7 +3475,7 @@ session_add_fir (const gchar * key, RTPSource * source, ReportData * data)
   guint16 len;
   guint8 *fci_data;
 
-  if (!source->send_fir)
+  if (source->key_unit_type == RTP_KEY_UNIT_FIR)
     return;
 
   len = gst_rtcp_packet_fb_get_fci_length (packet);
@@ -3474,7 +3491,7 @@ session_add_fir (const gchar * key, RTPSource * source, ReportData * data)
   fci_data[0] = source->current_send_fir_seqnum;
   fci_data[1] = fci_data[2] = fci_data[3] = 0;
 
-  source->send_fir = FALSE;
+  source->key_unit_type = RTP_KEY_UNIT_NONE;
   source->stats.sent_fir_count++;
 }
 
@@ -3527,7 +3544,8 @@ session_pli (const gchar * key, RTPSource * source, ReportData * data)
   GstRTCPBuffer *rtcp = &data->rtcpbuf;
   GstRTCPPacket *packet = &data->packet;
 
-  if (!source->send_pli)
+  if (source->key_unit_type != RTP_KEY_UNIT_PLI &&
+      source->key_unit_type != RTP_KEY_UNIT_XPLI)
     return;
 
   if (rtp_source_has_retained (source, has_pli_compare_func, NULL))
@@ -3542,7 +3560,22 @@ session_pli (const gchar * key, RTPSource * source, ReportData * data)
   gst_rtcp_packet_fb_set_sender_ssrc (packet, data->source->ssrc);
   gst_rtcp_packet_fb_set_media_ssrc (packet, source->ssrc);
 
-  source->send_pli = FALSE;
+  if (source->key_unit_type == RTP_KEY_UNIT_XPLI) {
+    guint8 *fci_data;
+
+    if (!gst_rtcp_packet_fb_set_fci_length (packet, 3)) {
+      /* exit because the packet is full */
+      gst_rtcp_packet_remove (packet);
+      return;
+    }
+
+    fci_data = gst_rtcp_packet_fb_get_fci (packet);
+    GST_WRITE_UINT16_BE (&fci_data[0], source->current_send_xpli_reqid);
+    GST_WRITE_UINT16_BE (&fci_data[sizeof (guint16)], 0);
+    GST_WRITE_UINT64_LE (&fci_data[sizeof (guint32)], source->current_send_xpli_sfr);
+  }
+
+  source->key_unit_type = RTP_KEY_UNIT_NONE;
   data->may_suppress = FALSE;
 
   source->stats.sent_pli_count++;
@@ -3917,10 +3950,20 @@ remove_closing_sources (const gchar * key, RTPSource * source,
   if (source->closing)
     return TRUE;
 
-  if (source->send_fir)
-    data->have_fir = TRUE;
-  if (source->send_pli)
-    data->have_pli = TRUE;
+  switch (source->key_unit_type) {
+    case RTP_KEY_UNIT_FIR:
+      data->have_fir = TRUE;
+      break;
+    case RTP_KEY_UNIT_PLI:
+    case RTP_KEY_UNIT_XPLI:
+      data->have_pli = TRUE;
+      break;
+    case RTP_KEY_UNIT_NONE:
+      break;
+    default:
+      g_assert_not_reached ();
+  }
+
   if (source->send_nack)
     data->have_nack = TRUE;
 
@@ -4362,9 +4405,54 @@ rtp_session_send_rtcp (RTPSession * sess, GstClockTime max_delay)
   return rtp_session_request_early_rtcp (sess, now, max_delay);
 }
 
+/**
+ * rtp_session_request_fir:
+ * @sess: a #RTPSession
+ * @ssrc: the SSRC
+ *
+ * Request scheduling of a FIR feedback packet in @ssrc.
+ *
+ * Returns: %TRUE if the FIR feedback could be scheduled
+ */
 gboolean
-rtp_session_request_key_unit (RTPSession * sess, guint32 ssrc,
-    gboolean fir, gint count)
+rtp_session_request_fir (RTPSession * sess, guint32 ssrc, gint count)
+{
+  RTPSource *src;
+
+  RTP_SESSION_LOCK (sess);
+  src = find_source (sess, ssrc);
+  if (src == NULL)
+    goto no_source;
+
+  src->key_unit_type = RTP_KEY_UNIT_FIR;
+  if (count == -1 || count != src->last_fir_count)
+    src->current_send_fir_seqnum++;
+  src->last_fir_count = count;
+  RTP_SESSION_UNLOCK (sess);
+
+  rtp_session_send_rtcp (sess, 200 * GST_MSECOND);
+
+  return TRUE;
+
+  /* ERRORS */
+no_source:
+  {
+    RTP_SESSION_UNLOCK (sess);
+    return FALSE;
+  }
+}
+
+/**
+ * rtp_session_request_pli:
+ * @sess: a #RTPSession
+ * @ssrc: the SSRC
+ *
+ * Request scheduling of a PLI feedback packet in @ssrc.
+ *
+ * Returns: %TRUE if the PLI feedback could be scheduled
+ */
+gboolean
+rtp_session_request_pli (RTPSession * sess, guint32 ssrc)
 {
   RTPSource *src;
 
@@ -4377,23 +4465,71 @@ rtp_session_request_key_unit (RTPSession * sess, guint32 ssrc,
   src = find_source (sess, ssrc);
   if (src == NULL)
     goto no_source;
+  if (src->key_unit_type != RTP_KEY_UNIT_NONE)
+    goto key_unit_already_requested;
 
-  if (fir) {
-    src->send_pli = FALSE;
-    src->send_fir = TRUE;
+  GST_DEBUG ("request PLI for %08x", ssrc);
+  src->key_unit_type = RTP_KEY_UNIT_PLI;
+  RTP_SESSION_UNLOCK (sess);
 
-    if (count == -1 || count != src->last_fir_count)
-      src->current_send_fir_seqnum++;
-    src->last_fir_count = count;
-  } else if (!src->send_fir) {
-    src->send_pli = TRUE;
+  rtp_session_send_rtcp (sess, 200 * GST_MSECOND);
+
+  return TRUE;
+
+  /* ERRORS */
+no_source:
+  {
+    RTP_SESSION_UNLOCK (sess);
+    return FALSE;
   }
+key_unit_already_requested:
+  {
+    RTP_SESSION_UNLOCK (sess);
+    return FALSE;
+  }
+}
+
+/**
+ * rtp_session_request_xpli:
+ * @sess: a #RTPSession
+ * @ssrc: the SSRC
+ *
+ * Request scheduling of a x-PLI feedback packet in @ssrc.
+ *
+ * Returns: %TRUE if the x-PLI feedback could be scheduled
+ */
+gboolean
+rtp_session_request_xpli (RTPSession * sess, guint32 ssrc,
+    gint reqid, guint64 sfr)
+{
+  RTPSource *src;
+
+  RTP_SESSION_LOCK (sess);
+  src = find_source (sess, ssrc);
+  if (src == NULL)
+    goto no_source;
+  if (src->key_unit_type != RTP_KEY_UNIT_NONE)
+    goto key_unit_already_requested;
+
+  src->key_unit_type = RTP_KEY_UNIT_XPLI;
+  src->current_send_xpli_sfr = sfr;
+  if (reqid < 0)
+    src->current_send_xpli_reqid++;
+  else
+    src->current_send_xpli_reqid = reqid;
+  GST_DEBUG ("request x-PLI for %08x, reqid %d, sfr %016"G_GINT64_MODIFIER"x",
+      ssrc, src->current_send_xpli_reqid, sfr);
   RTP_SESSION_UNLOCK (sess);
 
   return TRUE;
 
   /* ERRORS */
 no_source:
+  {
+    RTP_SESSION_UNLOCK (sess);
+    return FALSE;
+  }
+key_unit_already_requested:
   {
     RTP_SESSION_UNLOCK (sess);
     return FALSE;
