@@ -254,6 +254,8 @@ rtp_source_reset (RTPSource * src)
     g_free (src->bye_reason);
   src->bye_reason = NULL;
   src->sent_bye = FALSE;
+  src->key_unit_type = RTP_KEY_UNIT_NONE;
+  src->last_recv_xpli_reqid = -1;
   g_hash_table_remove_all (src->reported_in_sr_of);
 
   src->stats.cycles = -1;
@@ -821,6 +823,9 @@ rtp_source_update_caps (RTPSource * src, GstCaps * caps)
 
   GST_DEBUG ("got %sseqnum-offset %" G_GINT32_FORMAT, rtx ? "rtx " : "",
       src->seqnum_offset);
+
+  src->recv_xpli = gst_structure_has_field (s, "rtcp-fb-x-message-x-pli");
+  GST_DEBUG ("RX PLI mode: %s", src->recv_xpli ? "ms x-pli" : "std pli");
 
   gst_caps_replace (&src->caps, caps);
 }
