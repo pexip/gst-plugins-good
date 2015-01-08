@@ -345,6 +345,7 @@ rtp_source_create_stats (RTPSource * src)
   guint32 rtptime = 0;
   guint32 packet_count = 0;
   guint32 octet_count = 0;
+  guint32 rb_ssrc = 0;
 
 
   /* common data for all types of sources */
@@ -408,7 +409,7 @@ rtp_source_create_stats (RTPSource * src)
 
     /* get the last RB */
     have_rb = rtp_source_get_last_rb (src, &fractionlost, &packetslost,
-        &exthighestseq, &jitter, &lsr, &dlsr, &round_trip);
+        &exthighestseq, &jitter, &lsr, &dlsr, &round_trip, &rb_ssrc);
 
     gst_structure_set (s,
         "have-rb", G_TYPE_BOOLEAN, have_rb,
@@ -418,7 +419,8 @@ rtp_source_create_stats (RTPSource * src)
         "rb-jitter", G_TYPE_UINT, (guint) jitter,
         "rb-lsr", G_TYPE_UINT, (guint) lsr,
         "rb-dlsr", G_TYPE_UINT, (guint) dlsr,
-        "rb-round-trip", G_TYPE_UINT, (guint) round_trip, NULL);
+        "rb-round-trip", G_TYPE_UINT, (guint) round_trip,
+        "rb-ssrc", G_TYPE_UINT, (guint) rb_ssrc, NULL);
   }
 
   return s;
@@ -1341,13 +1343,14 @@ rtp_source_process_sr (RTPSource * src, GstClockTime time, guint64 ntptime,
  *   (in NTP Short Format, 16.16 fixed point)
  * @dlsr: the delay since the last SR packet
  *   (in NTP Short Format, 16.16 fixed point)
+ * @ssrc: the ssrc of the source to which the information pertains
  *
  * Update the report block in @src.
  */
 void
 rtp_source_process_rb (RTPSource * src, guint64 ntpnstime,
     guint8 fractionlost, gint32 packetslost, guint32 exthighestseq,
-    guint32 jitter, guint32 lsr, guint32 dlsr)
+    guint32 jitter, guint32 lsr, guint32 dlsr, guint32 ssrc)
 {
   RTPReceiverReport *curr;
   gint curridx;
@@ -1372,6 +1375,7 @@ rtp_source_process_rb (RTPSource * src, guint64 ntpnstime,
   curr->jitter = jitter;
   curr->lsr = lsr;
   curr->dlsr = dlsr;
+  curr->ssrc = ssrc;
 
   /* convert the NTP time in nanoseconds to 32.32 fixed point */
   f_ntp = gst_util_uint64_scale (ntpnstime, (1LL << 32), GST_SECOND);
@@ -1491,6 +1495,7 @@ rtp_source_get_new_sr (RTPSource * src, guint64 ntpnstime,
  *   (in NTP Short Format, 16.16 fixed point)
  * @dlsr: the delay since the last SR packet
  *   (in NTP Short Format, 16.16 fixed point)
+ * @ssrc: the ssrc of the source to which the information pertains
  *
  * Get new values to put into a new report block from this source.
  *
@@ -1499,7 +1504,7 @@ rtp_source_get_new_sr (RTPSource * src, guint64 ntpnstime,
 gboolean
 rtp_source_get_new_rb (RTPSource * src, GstClockTime time,
     guint8 * fractionlost, gint32 * packetslost, guint32 * exthighestseq,
-    guint32 * jitter, guint32 * lsr, guint32 * dlsr)
+    guint32 * jitter, guint32 * lsr, guint32 * dlsr, guint32 * ssrc)
 {
   RTPSourceStats *stats;
   guint64 extended_max, expected;
@@ -1568,6 +1573,8 @@ rtp_source_get_new_rb (RTPSource * src, GstClockTime time,
     *lsr = LSR;
   if (dlsr)
     *dlsr = DLSR;
+  if (ssrc)
+    *ssrc = src->ssrc;
 
   return TRUE;
 }
@@ -1624,6 +1631,7 @@ rtp_source_get_last_sr (RTPSource * src, GstClockTime * time, guint64 * ntptime,
  *   (in NTP Short Format, 16.16 fixed point)
  * @round_trip: the round-trip time
  *   (in NTP Short Format, 16.16 fixed point)
+ * @ssrc: the ssrc of the source to which the information pertains
  *
  * Get the values of the last RB report set with rtp_source_process_rb().
  *
@@ -1632,7 +1640,7 @@ rtp_source_get_last_sr (RTPSource * src, GstClockTime * time, guint64 * ntptime,
 gboolean
 rtp_source_get_last_rb (RTPSource * src, guint8 * fractionlost,
     gint32 * packetslost, guint32 * exthighestseq, guint32 * jitter,
-    guint32 * lsr, guint32 * dlsr, guint32 * round_trip)
+    guint32 * lsr, guint32 * dlsr, guint32 * round_trip, guint32 * ssrc)
 {
   RTPReceiverReport *curr;
 
@@ -1656,6 +1664,8 @@ rtp_source_get_last_rb (RTPSource * src, guint8 * fractionlost,
     *dlsr = curr->dlsr;
   if (round_trip)
     *round_trip = curr->round_trip;
+  if (ssrc)
+    *ssrc = curr->ssrc;
 
   return TRUE;
 }
