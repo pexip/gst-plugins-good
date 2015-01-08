@@ -2266,7 +2266,7 @@ rtp_session_process_rb (RTPSession * sess, RTPSource * source,
        * the other sender to see if we are better or worse. */
       /* FIXME, need to keep track who the RB block is from */
       rtp_source_process_rb (source, pinfo->ntpnstime, fractionlost,
-          packetslost, exthighestseq, jitter, lsr, dlsr);
+          packetslost, exthighestseq, jitter, lsr, dlsr, ssrc);
     }
   }
   on_ssrc_active (sess, source);
@@ -2615,7 +2615,8 @@ rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
 {
   guint32 round_trip = 0;
 
-  rtp_source_get_last_rb (src, NULL, NULL, NULL, NULL, NULL, NULL, &round_trip);
+  rtp_source_get_last_rb (src, NULL, NULL, NULL, NULL, NULL, NULL, &round_trip,
+      NULL);
 
   if (sess->last_keyframe_request != GST_CLOCK_TIME_NONE && round_trip) {
     GstClockTime round_trip_in_ns = gst_util_uint64_scale (round_trip,
@@ -3414,7 +3415,7 @@ session_report_blocks (const gchar * key, RTPSource * source, ReportData * data)
   guint8 fractionlost;
   gint32 packetslost;
   guint32 exthighestseq, jitter;
-  guint32 lsr, dlsr;
+  guint32 lsr, dlsr, ssrc;
 
   /* don't report for sources in future generations */
   if (((gint16) (source->generation - sess->generation)) > 0) {
@@ -3447,7 +3448,7 @@ session_report_blocks (const gchar * key, RTPSource * source, ReportData * data)
 
   /* get new stats */
   rtp_source_get_new_rb (source, data->current_time, &fractionlost,
-      &packetslost, &exthighestseq, &jitter, &lsr, &dlsr);
+      &packetslost, &exthighestseq, &jitter, &lsr, &dlsr, &ssrc);
 
   /* store last generated RR packet */
   source->last_rr.is_valid = TRUE;
@@ -3457,6 +3458,7 @@ session_report_blocks (const gchar * key, RTPSource * source, ReportData * data)
   source->last_rr.jitter = jitter;
   source->last_rr.lsr = lsr;
   source->last_rr.dlsr = dlsr;
+  source->last_rr.ssrc = ssrc;
 
   /* packet is not yet filled, add report block for this source. */
   gst_rtcp_packet_add_rb (packet, source->ssrc, fractionlost, packetslost,
