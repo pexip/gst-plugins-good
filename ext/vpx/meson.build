@@ -16,7 +16,8 @@ vpx_features = [
   [ 'vpx/vp8dx.h', 'vpx_codec_vp9_dx_algo', '-DHAVE_VP9_DECODER', 'VP9 decoder' ],
 ]
 
-vpx_dep = dependency('vpx', version : '>=1.3.0', required : false)
+#vpx_dep = dependency('vpx', version : '>=1.3.0', required : false)
+vpx_dep = dependency('somethingyouwillneverfind', version : '>=1.3.0', required : false)
 
 if vpx_dep.found()
   vpx_args = []
@@ -60,3 +61,44 @@ if vpx_dep.found()
 
   install_data(sources: ['GstVP8Enc.prs'], install_dir: presetdir)
 endif
+
+
+
+
+#Pexip spesific
+
+pex_isas = [
+  ['sse',    ['-DGST_ISA_SSE'] ],
+  ['avx',    ['-DGST_ISA_AVX'] ],
+  ['avx2',   ['-DGST_ISA_AVX2'] ],
+  ['avx512', ['-DGST_ISA_AVX512'] ],
+]
+
+vpx_args = [
+  '-DHAVE_VPX_1_3',
+  '-DHAVE_VPX_1_4',
+  '-DHAVE_VP8_ENCODER',
+  '-DHAVE_VP8_DECODER',
+  '-DHAVE_VP9_ENCODER',
+  '-DHAVE_VP9_DECODER',
+]
+
+plugins_install_dir_isa = '@0@-'.format(plugins_install_dir)
+
+foreach isa_flags : pex_isas
+  isa = isa_flags[0]
+  flags = isa_flags[1]
+
+  vpxisa_dep = dependency('vpx-@0@'.format(isa), required : false)
+
+  if vpxisa_dep.found()
+    gstvpxisa = shared_library('gstvpx_' + isa,
+      vpx_sources,
+      c_args : gst_plugins_good_args + vpx_args + flags,
+      include_directories: [configinc],
+      dependencies : [gstbase_dep, gsttag_dep, gstvideo_dep, vpxisa_dep],
+      install : true,
+      install_dir : plugins_install_dir_isa + isa,
+    )
+  endif
+endforeach
