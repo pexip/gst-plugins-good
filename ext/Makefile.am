@@ -125,6 +125,18 @@ else
 VPX_DIR=
 endif
 
+if USE_VPX_SSE
+VPX_DIR=vpx
+endif
+
+if USE_VPX_AVX
+VPX_DIR=vpx
+endif
+
+if USE_VPX_AVX2
+VPX_DIR=vpx
+endif
+
 if USE_WAVPACK
 WAVPACK_DIR=wavpack
 else
