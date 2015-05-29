@@ -72,3 +72,11 @@ CRUFT_DIRS = \
 include $(top_srcdir)/common/cruft.mak
 
 all-local: check-cruft
+
+if ENABLE_SIMD_SYMLINK
+# symlink to the plugins with the correct instruction set
+install-exec-hook:
+	$(MKDIR_P) $(plugindir) && \
+	cd $(plugindir) && \
+	$(LN_S) -f $(simddir) simd
+endif
