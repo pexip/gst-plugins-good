@@ -33,31 +33,53 @@
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
+
 #ifdef HAVE_VP8_DECODER
-  gst_element_register (plugin, "vp8dec", GST_RANK_PRIMARY,
-      gst_vp8_dec_get_type ());
+  if (!g_type_from_name ("GstVP8Dec")) {
+    gst_element_register (plugin, "vp8dec", GST_RANK_PRIMARY,
+        gst_vp8_dec_get_type ());
+  }
 #endif
 
 #ifdef HAVE_VP8_ENCODER
-  gst_element_register (plugin, "vp8enc", GST_RANK_PRIMARY,
-      gst_vp8_enc_get_type ());
+  if (!g_type_from_name ("GstVP8Enc")) {
+    gst_element_register (plugin, "vp8enc", GST_RANK_PRIMARY,
+        gst_vp8_enc_get_type ());
+  }
 #endif
 
 #ifdef HAVE_VP9_DECODER
-  gst_element_register (plugin, "vp9dec", GST_RANK_PRIMARY,
-      gst_vp9_dec_get_type ());
+  if (!g_type_from_name ("GstVP9Dec")) {
+    gst_element_register (plugin, "vp9dec", GST_RANK_PRIMARY,
+        gst_vp9_dec_get_type ());
+  }
 #endif
 
 #ifdef HAVE_VP9_ENCODER
-  gst_element_register (plugin, "vp9enc", GST_RANK_PRIMARY,
-      gst_vp9_enc_get_type ());
+  if (!g_type_from_name ("GstVP9Enc")) {
+    gst_element_register (plugin, "vp9enc", GST_RANK_PRIMARY,
+        gst_vp9_enc_get_type ());
+  }
 #endif
 
   return TRUE;
 }
 
+/* Pexip Spesific */
+#if defined (GST_ISA_SSE)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _sse)
+#elif defined (GST_ISA_AVX)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx)
+#elif defined (GST_ISA_AVX2)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx2)
+#elif defined (GST_ISA_AVX512)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx512)
+#else
+#  define GST_ISA_SUFFIX(name) name
+#endif
+
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-    vpx,
+    GST_ISA_SUFFIX (vpx),
     "VP8 plugin",
     plugin_init, VERSION, "LGPL", GST_PACKAGE_NAME, GST_PACKAGE_ORIGIN)
