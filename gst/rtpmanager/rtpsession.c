@@ -73,6 +73,7 @@ enum
 #define DEFAULT_PROBATION            RTP_DEFAULT_PROBATION
 #define DEFAULT_SSRC_COLLISION_DETECTION TRUE
 #define DEFAULT_RTP_PROFILE          GST_RTP_PROFILE_AVP
+#define DEFAULT_RTCP_REDUCED_SIZE    FALSE
 
 enum
 {
@@ -95,7 +96,8 @@ enum
   PROP_PROBATION,
   PROP_SSRC_COLLISION_DETECTION,
   PROP_STATS,
-  PROP_RTP_PROFILE
+  PROP_RTP_PROFILE,
+  PROP_RTCP_REDUCED_SIZE
 };
 
 /* update average packet size */
@@ -567,6 +569,12 @@ rtp_session_class_init (RTPSessionClass * klass)
           "RTP profile to use for this session", GST_TYPE_RTP_PROFILE,
           DEFAULT_RTP_PROFILE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_RTCP_REDUCED_SIZE,
+      g_param_spec_boolean ("rtcp-reduced-size", "RTCP Reduced Size",
+          "Use Reduced Size RTCP for feedback packets",
+          DEFAULT_RTCP_REDUCED_SIZE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   klass->get_source_by_ssrc =
       GST_DEBUG_FUNCPTR (rtp_session_get_source_by_ssrc);
   klass->send_rtcp = GST_DEBUG_FUNCPTR (rtp_session_send_rtcp);
@@ -645,6 +653,7 @@ rtp_session_init (RTPSession * sess)
   sess->rtcp_immediate_feedback_threshold =
       DEFAULT_RTCP_IMMEDIATE_FEEDBACK_THRESHOLD;
   sess->rtp_profile = DEFAULT_RTP_PROFILE;
+  sess->reduced_size_rtcp = DEFAULT_RTCP_REDUCED_SIZE;
 
   sess->last_keyframe_request = GST_CLOCK_TIME_NONE;
 
@@ -827,6 +836,9 @@ rtp_session_set_property (GObject * object, guint prop_id,
       if (sess->callbacks.reconsider)
         sess->callbacks.reconsider (sess, sess->reconsider_user_data);
       break;
+    case PROP_RTCP_REDUCED_SIZE:
+      sess->reduced_size_rtcp = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -896,6 +908,9 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_RTP_PROFILE:
       g_value_set_enum (value, sess->rtp_profile);
+      break;
+    case PROP_RTCP_REDUCED_SIZE:
+      g_value_set_boolean (value, sess->reduced_size_rtcp);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -3326,6 +3341,9 @@ session_start_rtcp (RTPSession * sess, ReportData * data)
 
   gst_rtcp_buffer_map (data->rtcp, GST_MAP_READWRITE, rtcp);
 
+  if (data->is_early && sess->reduced_size_rtcp)
+    return;
+
   if (RTP_SOURCE_IS_SENDER (own)) {
     guint64 ntptime;
     guint32 rtptime;
@@ -3952,7 +3970,7 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
     g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_CREATING_SRRR], 0,
         source, &data->packet);
   }
-  if (!data->has_sdes)
+  if (!data->has_sdes && (!data->is_early || !sess->reduced_size_rtcp))
     session_sdes (sess, data);
 
   if (data->have_fir)
