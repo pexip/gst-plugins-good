@@ -547,12 +547,14 @@ gst_vp9_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
       case VPX_IMG_FMT_YV12:
         fmt = GST_VIDEO_FORMAT_YV12;
         break;
+/*
       case VPX_IMG_FMT_I422:
         fmt = GST_VIDEO_FORMAT_Y42B;
         break;
       case VPX_IMG_FMT_I444:
         fmt = GST_VIDEO_FORMAT_Y444;
         break;
+*/
       default:
         vpx_img_free (img);
         GST_ELEMENT_ERROR (decoder, LIBRARY, ENCODE,
