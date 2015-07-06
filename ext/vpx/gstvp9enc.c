@@ -181,6 +181,7 @@ gst_vp9_enc_set_image_format (GstVPXEnc * enc, vpx_image_t * image)
       image->bps = 12;
       image->x_chroma_shift = image->y_chroma_shift = 1;
       break;
+/*
     case GST_VIDEO_FORMAT_Y42B:
       image->fmt = VPX_IMG_FMT_I422;
       image->bps = 16;
@@ -192,6 +193,7 @@ gst_vp9_enc_set_image_format (GstVPXEnc * enc, vpx_image_t * image)
       image->bps = 24;
       image->x_chroma_shift = image->y_chroma_shift = 0;
       break;
+*/
     default:
       g_assert_not_reached ();
       break;
