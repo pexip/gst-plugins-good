@@ -140,6 +140,7 @@ gst_vp9_dec_get_valid_format (GstVPXDec * dec, vpx_image_t * img,
       *fmt = GST_VIDEO_FORMAT_YV12;
       return TRUE;
 
+/*
     case VPX_IMG_FMT_I422:
       *fmt = GST_VIDEO_FORMAT_Y42B;
       return TRUE;
@@ -147,7 +148,7 @@ gst_vp9_dec_get_valid_format (GstVPXDec * dec, vpx_image_t * img,
     case VPX_IMG_FMT_I444:
       *fmt = GST_VIDEO_FORMAT_Y444;
       return TRUE;
-
+*/
     default:
       return FALSE;
   }
