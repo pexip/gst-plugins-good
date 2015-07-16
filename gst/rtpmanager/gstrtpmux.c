@@ -607,7 +607,7 @@ same_clock_rate_fold (const GValue * item, GValue * ret, gpointer user_data)
     return TRUE;
 
   accumcaps = g_value_get_boxed (ret);
-  peercaps = gst_pad_peer_query_caps (pad, accumcaps);
+  peercaps = gst_pad_peer_query_caps (pad, NULL);
   if (!peercaps) {
     g_warning ("no peercaps");
     return TRUE;
