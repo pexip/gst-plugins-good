@@ -444,7 +444,7 @@ on_sender_timeout (RTPSession * session, RTPSource * src, GstRtpSession * sess)
 static void
 on_notify_stats (RTPSession * session, GParamSpec *spec, GstRtpSession *rtpsession)
 {
-  g_object_notify (rtpsession, "stats");
+  g_object_notify (G_OBJECT (rtpsession), "stats");
 }
 
 #define gst_rtp_session_parent_class parent_class
