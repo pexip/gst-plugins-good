@@ -534,8 +534,8 @@ rtp_session_class_init (RTPSessionClass * klass)
    *      dropped (due to bandwidth constraints)
    *  "sent-nack-count" G_TYPE_UINT   Number of NACKs sent
    *  "recv-nack-count" G_TYPE_UINT   Number of NACKs received
-   *  "source-stats"    G_VALUE_ARRAY Array of #RTPSource::stats for all RTP
-   *      sources
+   *  "source-stats"    G_TYPE_BOXED  GValueArray of #RTPSource::stats for all
+   *      RTP sources
    *
    * Since: 1.6
    */
@@ -707,19 +707,23 @@ rtp_session_create_stats (RTPSession * sess)
 {
   GstStructure *s;
   GValueArray *source_stats;
+  GValue source_stats_v = G_VALUE_INIT;
   guint size;
+
+  s = gst_structure_new ("application/x-rtp-session-stats",
+      "rtx-drop-count", G_TYPE_UINT, sess->stats.nacks_dropped,
+      "sent-nack-count", G_TYPE_UINT, sess->stats.nacks_sent,
+      "recv-nack-count", G_TYPE_UINT, sess->stats.nacks_received,
+      NULL);
 
   size = g_hash_table_size (sess->ssrcs[sess->mask_idx]);
   source_stats = g_value_array_new (size);
   g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
       (GHFunc) create_source_stats, source_stats);
 
-  s = gst_structure_new ("application/x-rtp-session-stats",
-      "rtx-drop-count", G_TYPE_UINT, sess->stats.nacks_dropped,
-      "sent-nack-count", G_TYPE_UINT, sess->stats.nacks_sent,
-      "recv-nack-count", G_TYPE_UINT, sess->stats.nacks_received,
-      "source-stats", G_TYPE_VALUE_ARRAY, source_stats,
-      NULL);
+  g_value_init (&source_stats_v, G_TYPE_VALUE_ARRAY);
+  g_value_take_boxed (&source_stats_v, source_stats);
+  gst_structure_take_value (s, "source-stats", &source_stats_v);
 
   return s;
 }

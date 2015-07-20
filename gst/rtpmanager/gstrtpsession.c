@@ -669,8 +669,8 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
    *      dropped (due to bandwidth constraints)
    *  "sent-nack-count" G_TYPE_UINT   Number of NACKs sent
    *  "recv-nack-count" G_TYPE_UINT   Number of NACKs received
-   *  "source-stats"    G_VALUE_ARRAY Array of #RTPSource::stats for all RTP
-   *      sources
+   *  "source-stats"    G_TYPE_BOXED  GValueArray of #RTPSource::stats for all
+   *      RTP sources
    *
    * Since: 1.6
    */
