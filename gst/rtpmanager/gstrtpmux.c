@@ -249,6 +249,7 @@ gst_rtp_mux_init (GstRTPMux * rtp_mux)
   gst_element_add_pad (GST_ELEMENT (rtp_mux), rtp_mux->srcpad);
 
   rtp_mux->ssrc = DEFAULT_SSRC;
+  rtp_mux->current_ssrc = DEFAULT_SSRC;
   rtp_mux->ts_offset = DEFAULT_TIMESTAMP_OFFSET;
   rtp_mux->seqnum_offset = DEFAULT_SEQNUM_OFFSET;
 
@@ -549,9 +550,22 @@ gst_rtp_mux_setcaps (GstPad * pad, GstRTPMux * rtp_mux, GstCaps * caps)
 
   caps = gst_caps_copy (caps);
 
+  /* if we don't have a specified ssrc, first try to take one from the caps,
+     and if that fails, generate one */
+  if (rtp_mux->ssrc == DEFAULT_SSRC) {
+    if (rtp_mux->current_ssrc == DEFAULT_SSRC) {
+      if (!gst_structure_get_uint (structure, "ssrc", &rtp_mux->current_ssrc))
+        rtp_mux->current_ssrc = g_random_int ();
+    }
+  } else {
+    rtp_mux->current_ssrc = rtp_mux->ssrc;
+  }
+
   gst_caps_set_simple (caps,
       "timestamp-offset", G_TYPE_UINT, rtp_mux->ts_base,
-      "seqnum-offset", G_TYPE_UINT, rtp_mux->seqnum_base, NULL);
+      "seqnum-offset", G_TYPE_UINT, rtp_mux->seqnum_base,
+      "ssrc", G_TYPE_UINT, rtp_mux->current_ssrc,
+      NULL);
 
   if (rtp_mux->send_stream_start) {
     gchar s_id[32];
@@ -567,7 +581,6 @@ gst_rtp_mux_setcaps (GstPad * pad, GstRTPMux * rtp_mux, GstCaps * caps)
       "setting caps %" GST_PTR_FORMAT " on src pad..", caps);
   ret = gst_pad_set_caps (rtp_mux->srcpad, caps);
 
-  gst_structure_get_uint (structure, "ssrc", &rtp_mux->current_ssrc);
 
   gst_caps_unref (caps);
 
@@ -822,11 +835,6 @@ gst_rtp_mux_ready_to_paused (GstRTPMux * rtp_mux)
 
   g_clear_object (&rtp_mux->last_pad);
   rtp_mux->send_stream_start = TRUE;
-
-  if (rtp_mux->ssrc == -1)
-    rtp_mux->current_ssrc = g_random_int ();
-  else
-    rtp_mux->current_ssrc = rtp_mux->ssrc;
 
   if (rtp_mux->seqnum_offset == -1)
     rtp_mux->seqnum_base = g_random_int_range (0, G_MAXUINT16/2);
