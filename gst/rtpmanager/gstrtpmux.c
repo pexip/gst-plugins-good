@@ -643,9 +643,9 @@ gst_rtp_mux_getcaps (GstPad * pad, GstRTPMux * mux, GstCaps * filter)
   GstCaps *peercaps;
   GstCaps *othercaps;
   GstCaps *tcaps;
-  GstCaps *other_filtered;
+  const GstStructure *structure;
 
-  peercaps = gst_pad_peer_query_caps (mux->srcpad, filter);
+  peercaps = gst_pad_peer_query_caps (mux->srcpad, NULL);
 
   if (peercaps) {
     tcaps = gst_pad_get_pad_template_caps (pad);
@@ -662,21 +662,24 @@ gst_rtp_mux_getcaps (GstPad * pad, GstRTPMux * mux, GstCaps * filter)
   }
   gst_caps_unref (tcaps);
 
-  clear_caps (othercaps, FALSE);
+  GST_LOG_OBJECT (pad, "Intersected srcpad-peercaps and template caps: %"
+      GST_PTR_FORMAT, othercaps);
 
-  other_filtered = gst_caps_copy (othercaps);
-  clear_caps (other_filtered, TRUE);
+  structure = gst_caps_get_structure (othercaps, 0);
+  if (gst_structure_get_uint (structure, "ssrc", &mux->ssrc))
+    GST_DEBUG_OBJECT (pad, "Use downstream ssrc: %u", mux->ssrc);
+
+  clear_caps (othercaps, TRUE);
 
   g_value_init (&v, GST_TYPE_CAPS);
 
   iter = gst_element_iterate_sink_pads (GST_ELEMENT (mux));
   do {
-    gst_value_set_caps (&v, other_filtered);
+    gst_value_set_caps (&v, othercaps);
     res = gst_iterator_fold (iter, same_clock_rate_fold, &v, pad);
     gst_iterator_resync (iter);
   } while (res == GST_ITERATOR_RESYNC);
   gst_iterator_free (iter);
-  gst_caps_unref (other_filtered);
 
   caps = gst_caps_intersect ((GstCaps *) gst_value_get_caps (&v), othercaps);
 
@@ -704,8 +707,12 @@ gst_rtp_mux_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
       GstCaps *filter, *caps;
 
       gst_query_parse_caps (query, &filter);
+      GST_LOG_OBJECT (pad, "Received caps-query with filter-caps: %"
+          GST_PTR_FORMAT, filter);
       caps = gst_rtp_mux_getcaps (pad, mux, filter);
       gst_query_set_caps_result (query, caps);
+      GST_LOG_OBJECT (mux, "Answering caps-query with caps: %"
+          GST_PTR_FORMAT, caps);
       gst_caps_unref (caps);
       res = TRUE;
       break;
@@ -716,10 +723,7 @@ gst_rtp_mux_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
   }
 
   return res;
-
-
 }
-
 
 static void
 gst_rtp_mux_get_property (GObject * object,
@@ -787,6 +791,8 @@ gst_rtp_mux_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GstCaps *caps;
 
       gst_event_parse_caps (event, &caps);
+      GST_LOG_OBJECT (pad, "Received caps-event with caps: %"
+          GST_PTR_FORMAT, caps);
       ret = gst_rtp_mux_setcaps (pad, mux, caps);
       gst_event_unref (event);
       return ret;
