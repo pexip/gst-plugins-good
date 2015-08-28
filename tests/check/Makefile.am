@@ -272,6 +272,12 @@ else
 check_spectrum =
 endif
 
+if USE_SPEEX
+check_speex = elements/speex
+else
+check_speex =
+endif
+
 if USE_PLUGIN_SHAPEWIPE
 check_shapewipe = elements/shapewipe
 else
@@ -401,6 +407,7 @@ check_PROGRAMS = \
 	$(check_shapewipe) \
 	$(check_soup) \
 	$(check_spectrum) \
+	$(check_speex) \
 	$(check_taglib) \
 	$(check_twolame) \
 	$(check_udp) \
@@ -581,6 +588,9 @@ elements_rtph264_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstapp-$(GST_API_VERSION) $(
 
 elements_rtpmux_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
 elements_rtpmux_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(GST_BASE_LIBS) $(LDADD)
+
+elements_speex_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(CFLAGS) $(AM_CFLAGS)
+elements_speex_LDADD = 	$(GST_PLUGINS_BASE_LIBS) $(LDADD)
 
 elements_souphttpsrc_CFLAGS = $(SOUP_CFLAGS) $(AM_CFLAGS)
 elements_souphttpsrc_LDADD = $(SOUP_LIBS) $(LDADD)
