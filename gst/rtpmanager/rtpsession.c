@@ -2522,7 +2522,7 @@ rtp_session_process_bye (RTPSession * sess, GstRTCPPacket * packet,
     /* find src and mark bye, no probation when dealing with RTCP */
     source = obtain_source (sess, ssrc, &created, pinfo, FALSE);
     if (!source)
-      return;
+      goto done;
 
     if (source->internal) {
       /* our own source, something weird with this packet */
@@ -2599,6 +2599,8 @@ rtp_session_process_bye (RTPSession * sess, GstRTCPPacket * packet,
       sess->callbacks.reconsider (sess, sess->reconsider_user_data);
     RTP_SESSION_LOCK (sess);
   }
+
+done:
   g_free (reason);
 }
 
