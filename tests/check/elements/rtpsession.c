@@ -626,8 +626,7 @@ static void
 _creating_srrr (GObject * session, GObject * src, GstRTCPPacket * packet)
 {
   fail_unless_equals_int (GST_RTCP_TYPE_RR, gst_rtcp_packet_get_type (packet));
-  gst_rtcp_packet_set_profile_specific_ext (packet,
-      pse_data, sizeof (pse_data));
+  gst_rtcp_packet_add_profile_specific_ext (packet, pse_data, sizeof (pse_data));
 }
 
 static void
@@ -696,7 +695,7 @@ GST_START_TEST (test_creating_srrr)
   fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));
   fail_unless_equals_int (GST_RTCP_TYPE_RR, gst_rtcp_packet_get_type (&packet));
   fail_unless_equals_int (2, /* 2x 32bit words */
-      gst_rtcp_packet_get_profile_specific_ext_len (&packet));
+      gst_rtcp_packet_get_profile_specific_ext_length (&packet));
   gst_rtcp_buffer_unmap (&rtcp);
 
   destroy_testharness (&data);
