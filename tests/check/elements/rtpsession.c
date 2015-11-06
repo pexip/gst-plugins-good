@@ -25,6 +25,7 @@
 #include <gst/check/gstharness.h>
 #include <gst/check/gstcheck.h>
 #include <gst/check/gsttestclock.h>
+#include <gst/check/gstharness.h>
 
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/rtp/gstrtcpbuffer.h>
@@ -306,9 +307,6 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
 
   setup_testharness (&data, TRUE);
 
-  /* only the RTCP thread waits on the clock */
-  gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock), &id);
-
   for (i = 0; i < 2; i++) {     /* cycles between SR reports */
     for (j = 0; j < 5; j++) {   /* packets per ssrc */
       gint seq = (i * 5) + j;
@@ -331,6 +329,11 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
     queue_length = g_async_queue_length (data.rtcp_queue);
 
     do {
+      /* wait for the RTCP pad thread to output its data
+       * and start waiting on the next timeout */
+      gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock),
+          &id);
+
       /* crank the RTCP pad thread */
       time = gst_clock_id_get_time (id);
       GST_DEBUG ("Advancing time to %" GST_TIME_FORMAT, GST_TIME_ARGS (time));
@@ -340,11 +343,6 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
       gst_clock_id_unref (id);
       gst_clock_id_unref (tid);
 
-      /* wait for the RTCP pad thread to output its data
-       * and start waiting on the next timeout */
-      gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock),
-          &id);
-
       /* and retry as long as there are no new RTCP packets out,
        * because the RTCP thread may randomly decide to reschedule
        * the RTCP timeout for later */
@@ -352,7 +350,6 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
 
     GST_DEBUG ("RTCP timeout processed");
   }
-  gst_clock_id_unref (id);
 
   sr_ssrcs = g_hash_table_new (g_direct_hash, g_direct_equal);
   rb_ssrcs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
@@ -471,10 +468,16 @@ GST_START_TEST (test_internal_sources_timeout)
   GstFlowReturn res;
   gint i, j;
   GstCaps *caps;
+  gboolean ret;
 
   setup_testharness (&data, TRUE);
   g_object_get (data.session, "internal-session", &internal_session, NULL);
   g_object_set (internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+
+  /* ask explicitly to send RTCP since we have not started the internal RTCP
+     thread yet */
+  g_signal_emit_by_name (internal_session, "send-rtcp-full", GST_SECOND, &ret);
+  fail_unless (ret == FALSE);
 
   /* only the RTCP thread waits on the clock */
   gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock), &id);
@@ -689,7 +692,6 @@ GST_START_TEST (test_illegal_rtcp_fb_packet)
   g_object_get (data.session, "internal-session", &internal_session, NULL);
   g_object_set (internal_session,
       "internal-ssrc", 0xDEADBEEF,
-      "rtcp-rsize", TRUE,
       NULL);
 
   buf = gst_buffer_new_and_alloc (sizeof (rtcp_zero_fb_pkt));
@@ -957,6 +959,80 @@ GST_START_TEST (test_creating_srrr)
 
 GST_END_TEST;
 
+GST_START_TEST (test_dont_send_rtcp_while_idle)
+{
+  GstHarness * h_rtcp;
+  GstHarness * h_send;
+  GstClock * clock = gst_test_clock_new ();
+  GstTestClock * testclock = GST_TEST_CLOCK (clock);
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  gst_system_clock_set_default (clock);
+
+  h_rtcp = gst_harness_new_with_padnames (
+      "rtpsession", "recv_rtcp_sink", "send_rtcp_src");
+  h_send = gst_harness_new_with_element (
+      h_rtcp->element, "send_rtp_sink", "send_rtp_src");
+
+  /* verify the RTCP thread has not started */
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (testclock));
+  /* and that no RTCP has been pushed */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h_rtcp));
+
+  gst_harness_teardown (h_send);
+  gst_harness_teardown (h_rtcp);
+  gst_object_unref (clock);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_send_rtcp_when_signalled)
+{
+  GstHarness * h_rtcp;
+  GstHarness * h_send;
+  GstClock * clock = gst_test_clock_new ();
+  GstTestClock * testclock = GST_TEST_CLOCK (clock);
+  GstElement * internal_session;
+  gboolean ret;
+  GstClockID pending_id, processed_id;
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  gst_system_clock_set_default (clock);
+
+  h_rtcp = gst_harness_new_with_padnames (
+      "rtpsession", "recv_rtcp_sink", "send_rtcp_src");
+  h_send = gst_harness_new_with_element (
+      h_rtcp->element, "send_rtp_sink", "send_rtp_src");
+
+  g_object_get (h_rtcp->element, "internal-session", &internal_session, NULL);
+
+  /* verify the RTCP thread has not started */
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (testclock));
+  /* and that no RTCP has been pushed */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h_rtcp));
+
+  /* then ask explicitly to send RTCP */
+  g_signal_emit_by_name (internal_session, "send-rtcp-full", GST_SECOND, &ret);
+  /* this is FALSE due to no next RTCP check time */
+  fail_unless (ret == FALSE);
+
+  /* "crank" */
+  gst_test_clock_wait_for_next_pending_id (testclock, &pending_id);
+  gst_test_clock_set_time (testclock, gst_clock_id_get_time (pending_id));
+  processed_id = gst_test_clock_process_next_clock_id (testclock);
+  fail_unless (pending_id == processed_id);
+  gst_clock_id_unref (pending_id);
+  gst_clock_id_unref (processed_id);
+
+  /* and verify RTCP now was sent */
+  gst_buffer_unref (gst_harness_pull (h_rtcp));
+
+  gst_object_unref (internal_session);
+  gst_harness_teardown (h_send);
+  gst_harness_teardown (h_rtcp);
+  gst_object_unref (clock);
+}
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -972,6 +1048,9 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_dont_lock_on_stats);
   tcase_add_test (tc_chain, test_ignore_suspicious_bye);
   tcase_add_test (tc_chain, test_creating_srrr);
+
+  tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle);
+  tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
 
   return s;
 }
