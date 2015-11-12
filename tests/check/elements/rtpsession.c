@@ -1031,6 +1031,56 @@ GST_START_TEST (test_send_rtcp_when_signalled)
 
 GST_END_TEST;
 
+GST_START_TEST (test_send_rtcp_instantly)
+{
+  GstHarness *h_rtcp;
+  GstHarness *h_send;
+  GstClock *clock = gst_test_clock_new ();
+  GstTestClock *testclock = GST_TEST_CLOCK (clock);
+  GstElement *internal_session;
+  gboolean ret;
+  const GstClockTime now = 123456789;
+
+  /* advance the clock to "now" */
+  gst_test_clock_set_time (testclock, now);
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  gst_system_clock_set_default (clock);
+
+  h_rtcp =
+      gst_harness_new_with_padnames ("rtpsession", "recv_rtcp_sink",
+      "send_rtcp_src");
+  h_send =
+      gst_harness_new_with_element (h_rtcp->element, "send_rtp_sink",
+      "send_rtp_src");
+
+  g_object_get (h_rtcp->element, "internal-session", &internal_session, NULL);
+
+  /* verify the RTCP thread has not started */
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (testclock));
+  /* and that no RTCP has been pushed */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h_rtcp));
+
+  /* then ask explicitly to send RTCP */
+  g_signal_emit_by_name (internal_session, "send-rtcp-full", 0, &ret);
+  /* this is FALSE due to no next RTCP check time */
+  fail_unless (ret == TRUE);
+
+  /* "crank" and check the time */
+  g_assert (gst_test_clock_crank (testclock));
+  fail_unless_equals_int64 (now, gst_clock_get_time (clock));
+
+  /* and verify RTCP now was sent */
+  gst_buffer_unref (gst_harness_pull (h_rtcp));
+
+  gst_object_unref (internal_session);
+  gst_harness_teardown (h_send);
+  gst_harness_teardown (h_rtcp);
+  gst_object_unref (clock);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -1049,6 +1099,7 @@ rtpsession_suite (void)
 
   tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle);
   tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
+  tcase_add_test (tc_chain, test_send_rtcp_instantly);
 
   return s;
 }
