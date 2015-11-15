@@ -787,6 +787,7 @@ rtp_session_create_stats (RTPSession * sess)
   GValue source_stats_v = G_VALUE_INIT;
   guint size;
 
+  RTP_SESSION_LOCK (sess);
   s = gst_structure_new ("application/x-rtp-session-stats",
       "rtx-drop-count", G_TYPE_UINT, sess->stats.nacks_dropped,
       "sent-nack-count", G_TYPE_UINT, sess->stats.nacks_sent,
@@ -4190,7 +4191,9 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   session_update_ptp (sess);
 
   /* notify about updated statistics */
+  RTP_SESSION_UNLOCK (sess);
   g_object_notify (G_OBJECT (sess), "stats");
+  RTP_SESSION_LOCK (sess);
 
   /* see if we need to generate SR or RR packets */
   if (!is_rtcp_time (sess, current_time, &data))
