@@ -67,7 +67,8 @@ struct _GstVP8Enc
   /* properties */
   vpx_codec_enc_cfg_t cfg;
   gboolean have_default_config;
-  gboolean rc_target_bitrate_set;
+  gboolean rc_target_bitrate_auto;
+  gfloat bits_per_pixel;
   gint n_ts_target_bitrate;
   gint n_ts_rate_decimator;
   gint n_ts_layer_id;
