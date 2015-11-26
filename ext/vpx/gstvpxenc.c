@@ -47,7 +47,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_vpxenc_debug);
 #define DEFAULT_PROFILE 0
 
 #define DEFAULT_RC_END_USAGE VPX_VBR
-#define DEFAULT_RC_TARGET_BITRATE 256000
+#define DEFAULT_RC_TARGET_BITRATE 0
 #define DEFAULT_RC_MIN_QUANTIZER 4
 #define DEFAULT_RC_MAX_QUANTIZER 63
 
@@ -99,6 +99,8 @@ GST_DEBUG_CATEGORY_STATIC (gst_vpxenc_debug);
 #define DEFAULT_TIMEBASE_N 0
 #define DEFAULT_TIMEBASE_D 1
 
+#define DEFAULT_BITS_PER_PIXEL 3.3334
+
 enum
 {
   PROP_0,
@@ -145,7 +147,8 @@ enum
   PROP_TUNING,
   PROP_CQ_LEVEL,
   PROP_MAX_INTRA_BITRATE_PCT,
-  PROP_TIMEBASE
+  PROP_TIMEBASE,
+  PROP_BITS_PER_PIXEL
 };
 
 
@@ -365,7 +368,8 @@ gst_vpx_enc_class_init (GstVPXEncClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_RC_TARGET_BITRATE,
       g_param_spec_int ("target-bitrate", "Target bitrate",
-          "Target bitrate (in bits/sec)",
+          "Target bitrate (in bits/sec) (0:) audio - bitrate depends on "
+          "resolution, see \"bits-per-pixel\" property for more info",
           0, G_MAXINT, DEFAULT_RC_TARGET_BITRATE,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
@@ -635,6 +639,14 @@ gst_vpx_enc_class_init (GstVPXEncClass * klass)
           0, 1, G_MAXINT, 1, DEFAULT_TIMEBASE_N, DEFAULT_TIMEBASE_D,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_BITS_PER_PIXEL,
+      g_param_spec_float ("bits-per-pixel", "Bits per pixel",
+          "Factor to convert number of pixels to bitrate value, in the case "
+          "where the bitrate depends on resolution",
+          0.0, G_MAXFLOAT, DEFAULT_BITS_PER_PIXEL,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+
   GST_DEBUG_CATEGORY_INIT (gst_vpxenc_debug, "vpxenc", 0, "VPX Encoder");
 }
 
@@ -646,7 +658,7 @@ gst_vpx_enc_init (GstVPXEnc * gst_vpx_enc)
 
   gst_vpx_enc->cfg.rc_end_usage = DEFAULT_RC_END_USAGE;
   gst_vpx_enc->cfg.rc_target_bitrate = DEFAULT_RC_TARGET_BITRATE / 1000;
-  gst_vpx_enc->rc_target_bitrate_set = FALSE;
+  gst_vpx_enc->rc_target_bitrate_auto = DEFAULT_RC_TARGET_BITRATE == 0;
   gst_vpx_enc->cfg.rc_min_quantizer = DEFAULT_RC_MIN_QUANTIZER;
   gst_vpx_enc->cfg.rc_max_quantizer = DEFAULT_RC_MAX_QUANTIZER;
   gst_vpx_enc->cfg.rc_dropframe_thresh = DEFAULT_RC_DROPFRAME_THRESH;
@@ -694,6 +706,7 @@ gst_vpx_enc_init (GstVPXEnc * gst_vpx_enc)
   gst_vpx_enc->max_intra_bitrate_pct = DEFAULT_MAX_INTRA_BITRATE_PCT;
   gst_vpx_enc->timebase_n = DEFAULT_TIMEBASE_N;
   gst_vpx_enc->timebase_d = DEFAULT_TIMEBASE_D;
+  gst_vpx_enc->bits_per_pixel = DEFAULT_BITS_PER_PIXEL;
 
   gst_vpx_enc->cfg.g_profile = DEFAULT_PROFILE;
 
@@ -727,6 +740,13 @@ gst_vpx_enc_finalize (GObject * object)
 }
 
 static void
+gst_vpx_enc_set_auto_bitrate (GstVPXEnc *encoder)
+{
+  encoder->cfg.rc_target_bitrate = encoder->cfg.g_w * encoder->cfg.g_h *
+      encoder->bits_per_pixel / 1000;
+}
+
+static void
 gst_vpx_enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
@@ -745,8 +765,13 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
       global = TRUE;
       break;
     case PROP_RC_TARGET_BITRATE:
-      gst_vpx_enc->cfg.rc_target_bitrate = g_value_get_int (value) / 1000;
-      gst_vpx_enc->rc_target_bitrate_set = TRUE;
+      if (g_value_get_int (value) == 0) {
+        gst_vpx_enc_set_auto_bitrate (gst_vpx_enc);
+        gst_vpx_enc->rc_target_bitrate_auto = TRUE;
+      } else {
+        gst_vpx_enc->cfg.rc_target_bitrate = g_value_get_int (value) / 1000;
+        gst_vpx_enc->rc_target_bitrate_auto = FALSE;
+      }
       global = TRUE;
       break;
     case PROP_RC_MIN_QUANTIZER:
@@ -1089,6 +1114,13 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
       gst_vpx_enc->timebase_n = gst_value_get_fraction_numerator (value);
       gst_vpx_enc->timebase_d = gst_value_get_fraction_denominator (value);
       break;
+    case PROP_BITS_PER_PIXEL:
+      gst_vpx_enc->bits_per_pixel = g_value_get_float (value);
+      if (gst_vpx_enc->rc_target_bitrate_auto) {
+        gst_vpx_enc_set_auto_bitrate (gst_vpx_enc);
+        global = TRUE;
+      }
+      break;
     default:
       break;
   }
@@ -1310,6 +1342,9 @@ gst_vpx_enc_get_property (GObject * object, guint prop_id, GValue * value,
       gst_value_set_fraction (value, gst_vpx_enc->timebase_n,
           gst_vpx_enc->timebase_d);
       break;
+    case PROP_BITS_PER_PIXEL:
+      g_value_set_float (value, gst_vpx_enc->bits_per_pixel);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1444,16 +1479,12 @@ gst_vpx_enc_set_format (GstVideoEncoder * video_encoder,
   }
 
   encoder->cfg.g_profile = gst_vpx_enc_get_downstream_profile (encoder);
-
-  /* Scale default bitrate to our size */
-  if (!encoder->rc_target_bitrate_set)
-    encoder->cfg.rc_target_bitrate =
-        gst_util_uint64_scale (DEFAULT_RC_TARGET_BITRATE,
-        GST_VIDEO_INFO_WIDTH (info) * GST_VIDEO_INFO_HEIGHT (info),
-        320 * 240 * 1000);
-
   encoder->cfg.g_w = GST_VIDEO_INFO_WIDTH (info);
   encoder->cfg.g_h = GST_VIDEO_INFO_HEIGHT (info);
+
+  /* Scale default bitrate to our size */
+  if (encoder->rc_target_bitrate_auto)
+    gst_vpx_enc_set_auto_bitrate (encoder);
 
   if (encoder->timebase_n != 0 && encoder->timebase_d != 0) {
     GST_DEBUG_OBJECT (video_encoder, "Using timebase configuration");
