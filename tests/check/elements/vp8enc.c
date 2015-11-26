@@ -17,8 +17,9 @@
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
  */
-
+#include <gst/check/gstharness.h>
 #include <gst/check/gstcheck.h>
+#include <gst/video/video.h>
 
 static GstStaticPadTemplate sinktemplate = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -90,6 +91,7 @@ cleanup_vp8enc (GstElement * vp8enc)
   gst_check_teardown_element (vp8enc);
 }
 
+
 GST_START_TEST (test_encode_simple)
 {
   GstElement *vp8enc;
@@ -152,6 +154,76 @@ GST_START_TEST (test_encode_simple)
 
 GST_END_TEST;
 
+#define gst_caps_new_i420(w, h) gst_caps_new_i420_full (w, h, 30, 1, 1, 1)
+static GstCaps *
+gst_caps_new_i420_full (gint width, gint height, gint fps_n, gint fps_d,
+    gint par_n, gint par_d)
+{
+  GstVideoInfo info;
+  gst_video_info_init (&info);
+  gst_video_info_set_format (&info, GST_VIDEO_FORMAT_I420, width, height);
+  GST_VIDEO_INFO_FPS_N (&info) = fps_n;
+  GST_VIDEO_INFO_FPS_D (&info) = fps_d;
+  GST_VIDEO_INFO_PAR_N (&info) = par_n;
+  GST_VIDEO_INFO_PAR_D (&info) = par_d;
+  return gst_video_info_to_caps (&info);
+}
+
+static GstBuffer *
+gst_harness_create_video_buffer_from_info (GstHarness * h, gint value,
+    GstVideoInfo * info, GstClockTime timestamp, GstClockTime duration)
+{
+  GstBuffer * buf;
+  gsize size;
+
+  size = GST_VIDEO_INFO_SIZE (info);
+
+  buf = gst_harness_create_buffer (h, size);
+  gst_buffer_memset (buf, 0, value, size);
+  g_assert (buf != NULL);
+
+  gst_buffer_add_video_meta_full (buf,
+      GST_VIDEO_FRAME_FLAG_NONE,
+      GST_VIDEO_INFO_FORMAT (info),
+      GST_VIDEO_INFO_WIDTH (info),
+      GST_VIDEO_INFO_HEIGHT (info),
+      GST_VIDEO_INFO_N_PLANES (info),
+      info->offset,
+      info->stride);
+
+  GST_BUFFER_PTS (buf) = timestamp;
+  GST_BUFFER_DURATION (buf) = duration;
+
+  return buf;
+}
+
+static GstBuffer *
+gst_harness_create_video_buffer_full (GstHarness * h, gint value,
+    guint width, guint height,
+    GstClockTime timestamp, GstClockTime duration)
+{
+  GstVideoInfo info;
+
+  gst_video_info_init (&info);
+  gst_video_info_set_format (&info, GST_VIDEO_FORMAT_I420, width, height);
+
+  return gst_harness_create_video_buffer_from_info (h, value, &info,
+      timestamp, duration);
+}
+
+GST_START_TEST (test_encode_simple_when_bitrate_set_to_zero)
+{
+  GstHarness * h = gst_harness_new_parse ("vp8enc bitrate=0");
+  gst_harness_set_src_caps (h, gst_caps_new_i420 (320, 240));
+
+  GstBuffer *buf = gst_harness_create_video_buffer_full (h, 0x42,
+      320, 240, 0, gst_util_uint64_scale (GST_SECOND, 1, 30));
+  gst_harness_push (h, buf);
+  gst_buffer_unref (gst_harness_pull (h));
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 vp8enc_suite (void)
 {
@@ -161,6 +233,7 @@ vp8enc_suite (void)
   suite_add_tcase (s, tc_chain);
 
   tcase_add_test (tc_chain, test_encode_simple);
+  tcase_add_test (tc_chain, test_encode_simple_when_bitrate_set_to_zero);
 
   return s;
 }
