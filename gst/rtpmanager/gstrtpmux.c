@@ -666,8 +666,10 @@ gst_rtp_mux_getcaps (GstPad * pad, GstRTPMux * mux, GstCaps * filter)
       GST_PTR_FORMAT, othercaps);
 
   structure = gst_caps_get_structure (othercaps, 0);
-  if (gst_structure_get_uint (structure, "ssrc", &mux->ssrc))
-    GST_DEBUG_OBJECT (pad, "Use downstream ssrc: %u", mux->ssrc);
+  if (mux->ssrc == DEFAULT_SSRC) {
+    if (gst_structure_get_uint (structure, "ssrc", &mux->current_ssrc))
+      GST_DEBUG_OBJECT (pad, "Use downstream ssrc: %u", mux->current_ssrc);
+  }
 
   clear_caps (othercaps, TRUE);
 
