@@ -2546,7 +2546,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         remove_all_timers (jitterbuffer);
         priv->discont = TRUE;
         priv->last_popped_seqnum = -1;
-        priv->next_seqnum = seqnum;
+        priv->next_seqnum = -1;
 
         priv->last_in_seqnum = -1;
         priv->last_in_dts = -1;
