@@ -81,6 +81,8 @@ libgstrtp_la_SOURCES = \
 	gstrtpvorbispay.c  \
 	gstrtpvp8depay.c \
 	gstrtpvp8pay.c \
+	gstrtpvp9depay.c \
+	gstrtpvp9pay.c \
 	gstrtpvrawdepay.c  \
 	gstrtpvrawpay.c \
 	gstrtpstreampay.c \
@@ -183,6 +185,8 @@ noinst_HEADERS =			\
 	gstrtpvorbispay.h \
 	gstrtpvp8depay.h \
 	gstrtpvp8pay.h \
+	gstrtpvp9depay.h \
+	gstrtpvp9pay.h \
 	gstrtpvrawdepay.h \
 	gstrtpvrawpay.h \
 	gstrtpstreampay.h \
