@@ -1995,6 +1995,7 @@ gst_vp9_enc_handle_frame (GstVideoEncoder * video_encoder,
 
   g_mutex_unlock (&encoder->encoder_lock);
   gst_video_frame_unmap (&vframe);
+  g_slice_free (vpx_image_t, image);
 
   if (status != 0) {
     GST_ELEMENT_ERROR (encoder, LIBRARY, ENCODE,
