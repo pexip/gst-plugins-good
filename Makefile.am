@@ -83,5 +83,6 @@ if ENABLE_SIMD_SYMLINK
 install-exec-hook:
 	$(MKDIR_P) $(plugindir) && \
 	cd $(plugindir) && \
-	$(LN_S) -f $(simddir) simd
+	rm -f simd && \
+	$(LN_S) $(simddir) simd
 endif
