@@ -884,34 +884,61 @@ AG_GST_CHECK_FEATURE(VPX, [VPX decoder], vpx, [
 
 translit(dnm, m, l) AM_CONDITIONAL(USE_VPX_SSE, true)
 AG_GST_CHECK_FEATURE(VPX_SSE, [vpx sse], vpx-sse, [
+  HAVE_VP8_SSE=no
+  HAVE_VP9_SSE=no
   PKG_CHECK_MODULES(VPX_SSE, vpx-sse >= 1.1.0, [
-      AC_DEFINE(HAVE_VP8_ENCODER, 1, [Defined if the VP8 encoder is available])
-      AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
-      HAVE_VPX_SSE="yes"
-    ], [
-      HAVE_VPX_SSE="no"
+    HAVE_VPX_SSE="yes"
+    HAVE_VP8_SSE="yes"
+    AC_DEFINE(HAVE_VP8_ENCODER, 1, [Defined if the VP8 encoder is available])
+    AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
+
+    PKG_CHECK_MODULES(VPX_SSE_130, vpx-sse >= 1.3.0, [
+      HAVE_VP9_SSE="yes"
+      AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
+      AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
+    ], [true])
+  ], [
+    HAVE_VPX_SSE="no"
   ])
 ])
 
 translit(dnm, m, l) AM_CONDITIONAL(USE_VPX_AVX, true)
 AG_GST_CHECK_FEATURE(VPX_AVX, [vpx avx], vpx-avx, [
+  HAVE_VP8_AVX=no
+  HAVE_VP9_AVX=no
   PKG_CHECK_MODULES(VPX_AVX, vpx-avx >= 1.1.0, [
-      AC_DEFINE(HAVE_VP8_ENCODER, 1, [Defined if the VP8 encoder is available])
-      AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
-      HAVE_VPX_AVX="yes"
-    ], [
-      HAVE_VPX_AVX="no"
+    HAVE_VPX_AVX="yes"
+    HAVE_VP8_AVX="yes"
+    AC_DEFINE(HAVE_VP8_ENCODER, 1, [Defined if the VP8 encoder is available])
+    AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
+
+    PKG_CHECK_MODULES(VPX_AVX_130, vpx-avx >= 1.3.0, [
+      HAVE_VP9_AVX="yes"
+      AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
+      AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
+    ], [true])
+  ], [
+    HAVE_VPX_AVX="no"
   ])
 ])
 
 translit(dnm, m, l) AM_CONDITIONAL(USE_VPX_AVX2, true)
 AG_GST_CHECK_FEATURE(VPX_AVX2, [vpx avx2], vpx-avx2, [
+  HAVE_VP8_AVX2=no
+  HAVE_VP9_AVX2=no
   PKG_CHECK_MODULES(VPX_AVX2, vpx-avx2 >= 1.1.0, [
-      AC_DEFINE(HAVE_VP8_ENCODER, 1, [Defined if the VP8 encoder is available])
-      AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
-      HAVE_VPX_AVX2="yes"
-    ], [
-      HAVE_VPX_AVX2="no"
+    HAVE_VPX_AVX2="yes"
+    HAVE_VP8_AVX2="yes"
+    AC_DEFINE(HAVE_VP8_ENCODER, 1, [Defined if the VP8 encoder is available])
+    AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
+
+    PKG_CHECK_MODULES(VPX_AVX2_130, vpx-avx2 >= 1.3.0, [
+      HAVE_VP9_AVX2="yes"
+      AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
+      AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
+    ], [true])
+  ], [
+    HAVE_VPX_AVX2="no"
   ])
 ])
 
