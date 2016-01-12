@@ -4258,8 +4258,13 @@ done:
       UPDATE_AVG (sess->stats.avg_rtcp_packet_size, packet_size);
       GST_DEBUG ("%p, sending RTCP packet, avg size %u, %u", &sess->stats,
           sess->stats.avg_rtcp_packet_size, packet_size);
+      /*
+       * Temporary hack: Do not send EOS just because we are sending a BYE.
+       *                 Need to figure out the correct condition (if there
+       * is any) for sending EOS on the RTCP src pad
+       */
       result =
-          sess->callbacks.send_rtcp (sess, source, buffer, output->is_bye,
+        sess->callbacks.send_rtcp (sess, source, buffer, FALSE, /* output->is_bye, */
           sess->send_rtcp_user_data);
       sess->stats.nacks_sent += data.nacked_seqnums;
 
