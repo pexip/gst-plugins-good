@@ -3417,7 +3417,7 @@ typedef struct
   guint nacked_seqnums;
 } ReportData;
 
-static void
+static gboolean
 session_start_rtcp (RTPSession * sess, ReportData * data)
 {
   GstRTCPPacket *packet = &data->packet;
@@ -3430,7 +3430,7 @@ session_start_rtcp (RTPSession * sess, ReportData * data)
   gst_rtcp_buffer_map (data->rtcp, GST_MAP_READWRITE, rtcp);
 
   if (data->is_early && sess->reduced_size_rtcp)
-    return;
+    return FALSE;
 
   if (RTP_SOURCE_IS_SENDER (own)) {
     guint64 ntptime;
@@ -3457,6 +3457,8 @@ session_start_rtcp (RTPSession * sess, ReportData * data)
     gst_rtcp_buffer_add_packet (rtcp, GST_RTCP_TYPE_RR, packet);
     gst_rtcp_packet_rr_set_ssrc (packet, own->ssrc);
   }
+  
+  return TRUE;
 }
 
 /* construct a Sender or Receiver Report */
@@ -4030,6 +4032,7 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
   RTPSession *sess = data->sess;
   gboolean is_bye = FALSE;
   ReportOutput *output;
+  gboolean is_srrr = FALSE;
 
   /* only generate RTCP for active internal sources */
   if (!source->internal || source->sent_bye)
@@ -4042,18 +4045,21 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
   data->source = source;
 
   /* open packet */
-  session_start_rtcp (sess, data);
+  is_srrr = session_start_rtcp (sess, data);
 
   if (source->marked_bye) {
     /* send BYE */
     make_source_bye (sess, source, data);
     is_bye = TRUE;
-  } else if (!data->is_early) {
-    /* loop over all known sources and add report blocks. If we are early, we
-     * just make a minimal RTCP packet and skip this step */
-    g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-        (GHFunc) session_report_blocks, data);
-
+  } else if (is_srrr) {
+    
+    if (!data->is_early) {
+      /* loop over all known sources and add report blocks. If we are early, we
+       * just make a minimal RTCP packet and skip this step */
+      g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
+          (GHFunc) session_report_blocks, data);
+    }
+    
     /* Optionally add profile-specific extension */
     g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_CREATING_SRRR], 0,
         source, &data->packet);
