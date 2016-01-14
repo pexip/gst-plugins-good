@@ -2715,8 +2715,12 @@ rtp_session_process_pli (RTPSession * sess, guint32 sender_ssrc,
     return;
 
   src = find_source (sess, sender_ssrc);
-  if (src == NULL)
-    return;
+  if (src == NULL) {
+    /* try to find a src with media_ssrc instead */
+    src = find_source (sess, media_ssrc);
+    if (src == NULL)
+      return;
+  }
 
   if (!src->recv_xpli) {
     rtp_session_request_local_key_unit (sess, src, FALSE, current_time);
