@@ -78,6 +78,7 @@ enum
 #define DEFAULT_SSRC_COLLISION_DETECTION TRUE
 #define DEFAULT_RTP_PROFILE          GST_RTP_PROFILE_AVP
 #define DEFAULT_RTCP_REDUCED_SIZE    FALSE
+#define DEFAULT_STATS_MIN_INTERVAL   3000
 
 enum
 {
@@ -102,6 +103,7 @@ enum
   PROP_MAX_MISORDER_TIME,
   PROP_SSRC_COLLISION_DETECTION,
   PROP_STATS,
+  PROP_STATS_MIN_INTERVAL,
   PROP_RTP_PROFILE,
   PROP_RTCP_REDUCED_SIZE
 };
@@ -612,6 +614,12 @@ rtp_session_class_init (RTPSessionClass * klass)
           "Various statistics", GST_TYPE_STRUCTURE,
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_STATS_MIN_INTERVAL,
+      g_param_spec_uint ("stats-min-interval", "Minimum stats interval",
+          "Minimum interval between emitting notify signal for stats (in ms)",
+          0, G_MAXUINT, DEFAULT_STATS_MIN_INTERVAL,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   g_object_class_install_property (gobject_class, PROP_RTP_PROFILE,
       g_param_spec_enum ("rtp-profile", "RTP Profile",
           "RTP profile to use for this session", GST_TYPE_RTP_PROFILE,
@@ -704,6 +712,9 @@ rtp_session_init (RTPSession * sess)
       DEFAULT_RTCP_IMMEDIATE_FEEDBACK_THRESHOLD;
   sess->rtp_profile = DEFAULT_RTP_PROFILE;
   sess->reduced_size_rtcp = DEFAULT_RTCP_REDUCED_SIZE;
+
+  sess->last_stats_notify_time = GST_CLOCK_TIME_NONE;
+  sess->stats_min_interval_ms = DEFAULT_STATS_MIN_INTERVAL;
 
   sess->is_doing_ptp = TRUE;
 }
@@ -880,6 +891,9 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_SSRC_COLLISION_DETECTION:
       sess->ssrc_collision_detection = g_value_get_boolean (value);
       break;
+    case PROP_STATS_MIN_INTERVAL:
+      sess->stats_min_interval_ms = g_value_get_uint (value);
+      break;
     case PROP_RTP_PROFILE:
       sess->rtp_profile = g_value_get_enum (value);
       /* trigger reconsideration */
@@ -964,6 +978,9 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_STATS:
       g_value_take_boxed (value, rtp_session_create_stats (sess));
+      break;
+    case PROP_STATS_MIN_INTERVAL:
+      g_value_set_uint (value, sess->stats_min_interval_ms);
       break;
     case PROP_RTP_PROFILE:
       g_value_set_enum (value, sess->rtp_profile);
@@ -4249,7 +4266,12 @@ done:
   RTP_SESSION_UNLOCK (sess);
 
   /* notify about updated statistics */
-  g_object_notify (G_OBJECT (sess), "stats");
+  if (!GST_CLOCK_TIME_IS_VALID (sess->last_stats_notify_time) ||
+      (GST_CLOCK_DIFF (sess->last_stats_notify_time, current_time) >=
+          sess->stats_min_interval_ms * GST_MSECOND)) {
+    g_object_notify (G_OBJECT (sess), "stats");
+    sess->last_stats_notify_time = current_time;
+  }
 
   /* push out the RTCP packets */
   while ((output = g_queue_pop_head (&data.output))) {
