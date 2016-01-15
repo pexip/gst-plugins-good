@@ -4208,6 +4208,13 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   if (!is_rtcp_time (sess, current_time, &data))
     goto done;
 
+  if (!data.is_early) {
+    /* notify about updated statistics */
+    RTP_SESSION_UNLOCK (sess);
+    g_object_notify (G_OBJECT (sess), "stats");
+    RTP_SESSION_LOCK (sess);
+  }
+
   GST_DEBUG
       ("doing RTCP generation %u for %u sources, early %d, may suppress %d",
       sess->generation, data.num_to_report, data.is_early, data.may_suppress);
