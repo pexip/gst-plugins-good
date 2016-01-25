@@ -993,7 +993,6 @@ GST_START_TEST (test_send_rtcp_when_signalled)
   GstTestClock * testclock = GST_TEST_CLOCK (clock);
   GstElement * internal_session;
   gboolean ret;
-  GstClockID pending_id, processed_id;
 
   /* use testclock as the systemclock to capture the rtcp thread waits */
   gst_system_clock_set_default (clock);
@@ -1015,15 +1014,8 @@ GST_START_TEST (test_send_rtcp_when_signalled)
   /* this is FALSE due to no next RTCP check time */
   fail_unless (ret == FALSE);
 
-  /* "crank" */
-  gst_test_clock_wait_for_next_pending_id (testclock, &pending_id);
-  gst_test_clock_set_time (testclock, gst_clock_id_get_time (pending_id));
-  processed_id = gst_test_clock_process_next_clock_id (testclock);
-  fail_unless (pending_id == processed_id);
-  gst_clock_id_unref (pending_id);
-  gst_clock_id_unref (processed_id);
-
-  /* and verify RTCP now was sent */
+  /* "crank" and verify RTCP now was sent */
+  g_assert (gst_test_clock_crank (testclock));
   gst_buffer_unref (gst_harness_pull (h_rtcp));
 
   gst_object_unref (internal_session);
@@ -1041,8 +1033,6 @@ GST_START_TEST (test_send_rtcp_instantly)
   GstTestClock * testclock = GST_TEST_CLOCK (clock);
   GstElement * internal_session;
   gboolean ret;
-  GstClockID pending_id, processed_id;
-  GstClockTime time;
   const GstClockTime now = 123456789;
 
   /* advance the clock to "now" */
@@ -1068,17 +1058,9 @@ GST_START_TEST (test_send_rtcp_instantly)
   /* this is FALSE due to no next RTCP check time */
   fail_unless (ret == TRUE);
 
-  /* get the pending id and check the time */
-  gst_test_clock_wait_for_next_pending_id (testclock, &pending_id);
-  time = gst_clock_id_get_time (pending_id);
-
-  /* verify the RTCP-packet got delivered "now" */
-  fail_unless_equals_int64 (now, time);
-
-  processed_id = gst_test_clock_process_next_clock_id (testclock);
-  fail_unless (pending_id == processed_id);
-  gst_clock_id_unref (pending_id);
-  gst_clock_id_unref (processed_id);
+  /* "crank" and check the time */
+  g_assert (gst_test_clock_crank (testclock));
+  fail_unless_equals_int64 (now, gst_clock_get_time (clock));
 
   /* and verify RTCP now was sent */
   gst_buffer_unref (gst_harness_pull (h_rtcp));
