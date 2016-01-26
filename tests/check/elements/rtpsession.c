@@ -1060,6 +1060,7 @@ GST_START_TEST (test_ignore_suspicious_bye)
   gst_harness_teardown (h_send);
   gst_harness_teardown (h_rtcp);
   gst_object_unref (testclock);
+  gst_object_unref (internal_session);
 }
 GST_END_TEST;
 
