@@ -1066,14 +1066,6 @@ gst_flv_demux_parse_tag_audio (GstFlvDemux * demux, GstBuffer * buffer)
     /* Make it active */
     gst_pad_set_active (demux->audio_pad, TRUE);
 
-    /* Negotiate caps */
-    if (!gst_flv_demux_audio_negotiate (demux, codec_tag, rate, channels,
-            width)) {
-      gst_object_unref (demux->audio_pad);
-      demux->audio_pad = NULL;
-      ret = GST_FLOW_ERROR;
-      goto beach;
-    }
 #ifndef GST_DISABLE_GST_DEBUG
     {
       GstCaps *caps;
@@ -1090,6 +1082,15 @@ gst_flv_demux_parse_tag_audio (GstFlvDemux * demux, GstBuffer * buffer)
     gst_element_add_pad (GST_ELEMENT (demux),
         gst_object_ref (demux->audio_pad));
     gst_flow_combiner_add_pad (demux->flowcombiner, demux->audio_pad);
+
+    /* Negotiate caps */
+    if (!gst_flv_demux_audio_negotiate (demux, codec_tag, rate, channels,
+            width)) {
+      gst_object_unref (demux->audio_pad);
+      demux->audio_pad = NULL;
+      ret = GST_FLOW_ERROR;
+      goto beach;
+    }
 
     /* We only emit no more pads when we have audio and video. Indeed we can
      * not trust the FLV header to tell us if there will be only audio or
