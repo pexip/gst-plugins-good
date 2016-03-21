@@ -2858,6 +2858,9 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
   if (sess->scheduled_bye && src && RTP_SOURCE_IS_MARKED_BYE (src))
     return;
 
+  if (src)
+    g_object_ref (src);
+
   fci_data = gst_rtcp_packet_fb_get_fci (packet);
   fci_length = gst_rtcp_packet_fb_get_fci_length (packet) * sizeof (guint32);
 
@@ -2923,6 +2926,9 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
         break;
     }
   }
+
+  if (src)
+    g_object_unref (src);
 }
 
 /**
