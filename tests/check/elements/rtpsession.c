@@ -1219,6 +1219,107 @@ GST_START_TEST (test_ignore_suspicious_bye)
 }
 GST_END_TEST;
 
+typedef struct feedback_rtcp_cb_data_t {
+  GCond *cond;
+  GMutex *mutex;
+  gboolean fired;
+} feedback_rtcp_cb_data_t;
+
+static void feedback_rtcp_cb (GstElement * element,
+    guint fbtype, guint fmt, guint sender_ssrc, guint media_ssrc,
+    GstBuffer* fci, feedback_rtcp_cb_data_t *cb_data)
+{
+  g_mutex_lock (cb_data->mutex);
+  cb_data->fired = TRUE;
+  g_cond_wait (cb_data->cond, cb_data->mutex);
+  g_mutex_unlock (cb_data->mutex);
+}
+
+static void *
+send_feedback_rtcp (GstHarness * h_rtcp)
+{
+  GstRTCPPacket packet;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstBuffer *buffer = gst_rtcp_buffer_new (1000);
+
+  fail_unless (gst_rtcp_buffer_map (buffer, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_PSFB, &packet));
+  gst_rtcp_packet_fb_set_type (&packet, GST_RTCP_PSFB_TYPE_PLI);
+  gst_rtcp_packet_fb_set_fci_length (&packet, 0);
+  gst_rtcp_packet_fb_set_media_ssrc (&packet, 0xABE2B0B);
+  gst_rtcp_packet_fb_set_media_ssrc (&packet, 0xDEADBEEF);
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_harness_push (h_rtcp, buffer);
+  return NULL;
+}
+
+GST_START_TEST (test_feedback_rtcp_race)
+{
+  GCond cond;
+  GMutex mutex;
+  feedback_rtcp_cb_data_t cb_data;
+  gboolean feedback_rtcp_cb_fired;
+  GThread * send_rtcp_thread;
+  GstHarness * h_rtcp, * h_recv;
+  GstElement * internal_session;
+  GstTestClock * testclock;
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  testclock = GST_TEST_CLOCK (gst_test_clock_new ());
+  gst_test_clock_set_time (testclock, 0);
+  gst_system_clock_set_default (GST_CLOCK (testclock));
+
+  h_rtcp = gst_harness_new_with_padnames (
+      "rtpsession", "recv_rtcp_sink", "send_rtcp_src");
+  h_recv = gst_harness_new_with_element (
+      h_rtcp->element, "recv_rtp_sink", "recv_rtp_src");
+  g_object_get (h_rtcp->element, "internal-session", &internal_session, NULL);
+
+  g_cond_init (&cond);
+  g_mutex_init (&mutex);
+  cb_data.cond = &cond;
+  cb_data.mutex = &mutex;
+  cb_data.fired = FALSE;
+  g_signal_connect (internal_session, "on-feedback-rtcp",
+      G_CALLBACK (feedback_rtcp_cb), &cb_data);
+
+  /* Push RTP buffer making external source with SSRC=0xDEADBEEF*/
+  gst_harness_set_src_caps_str (h_recv,
+      "application/x-rtp,ssrc=(uint)0xDEADBEEF,"
+      "clock-rate=90000,seqnum-offset=(uint)12345");
+  gst_harness_push (h_recv,
+      generate_test_buffer (0, FALSE, 12345, 0, 0xDEADBEEF));
+
+  /* Push feedback RTCP with media SSRC=0xDEADBEEF*/
+  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
+  send_rtcp_thread = g_thread_new (NULL, (GThreadFunc) send_feedback_rtcp, h_rtcp);
+
+  /* Waiting for feedback RTCP callback to fire */
+  feedback_rtcp_cb_fired = FALSE;
+  while (!feedback_rtcp_cb_fired) {
+    g_mutex_lock (&mutex);
+    feedback_rtcp_cb_fired = cb_data.fired;
+    g_mutex_unlock (&mutex);
+  }
+
+  /* While send_rtcp_thread thread is waiting for our signal
+     advance the clock by 30sec triggering removal of 0xDEADBEEF,
+     as if the source was inactive for too long */
+  gst_test_clock_wait_for_next_pending_id (testclock, NULL);
+  gst_test_clock_advance_time (testclock, GST_SECOND*30);
+  gst_clock_id_unref(gst_test_clock_process_next_clock_id (testclock));
+  gst_buffer_unref (gst_harness_pull (h_rtcp));
+
+  /* Let send_rtcp_thread thread to finish */
+  g_cond_signal (&cond);
+  g_thread_join (send_rtcp_thread);
+  gst_harness_teardown (h_rtcp);
+  gst_harness_teardown (h_recv);
+  gst_object_unref (testclock);
+  gst_object_unref (internal_session);
+}
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -1241,6 +1342,7 @@ rtpsession_suite (void)
 
   tcase_add_test (tc_chain, test_dont_lock_on_stats);
   tcase_add_test (tc_chain, test_ignore_suspicious_bye);
+  tcase_add_test (tc_chain, test_feedback_rtcp_race);
   return s;
 }
 
