@@ -106,7 +106,7 @@ G_DEFINE_TYPE (GstFlvDemux, gst_flv_demux, GST_TYPE_ELEMENT);
 #define RESYNC_THRESHOLD 2000
 
 /* how much stream time to wait for audio tags to appear after we have video, or vice versa */
-#define DEFAULT_NO_MORE_PADS_THRESHOLD (6 * GST_SECOND)
+#define DEFAULT_NO_MORE_PADS_THRESHOLD -1
 
 static gboolean flv_demux_handle_seek_push (GstFlvDemux * demux,
     GstEvent * event);
