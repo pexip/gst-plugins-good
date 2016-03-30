@@ -1407,6 +1407,40 @@ GST_START_TEST (test_push_big_gap)
 
 GST_END_TEST;
 
+GST_START_TEST (test_latency_changed_event)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstEvent *event;
+
+  fail_unless_equals_int (0, gst_harness_events_received (h));
+
+  /* changing the latency should cause a downstream latency-changed event */
+  g_object_set (h->element, "latency", 20, NULL);
+
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_LATENCY_CHANGED, GST_EVENT_TYPE (event));
+  gst_event_unref (event);
+
+  fail_unless_equals_int (1, gst_harness_events_received (h));
+
+  /* same latency does not send the event again */
+  g_object_set (h->element, "latency", 20, NULL);
+  fail_unless_equals_int (1, gst_harness_events_received (h));
+
+  /* and changing again causes another one */
+  g_object_set (h->element, "latency", 40, NULL);
+
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_LATENCY_CHANGED, GST_EVENT_TYPE (event));
+  gst_event_unref (event);
+
+  fail_unless_equals_int (2, gst_harness_events_received (h));
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpjitterbuffer_suite (void)
 {
@@ -1430,6 +1464,7 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_deadline_ts_offset);
   tcase_add_test (tc_chain, test_dts_gap_larger_than_latency);
   tcase_add_test (tc_chain, test_push_big_gap);
+  tcase_add_test (tc_chain, test_latency_changed_event);
 
   return s;
 }
