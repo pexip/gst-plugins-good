@@ -73,6 +73,7 @@ struct _GstRtpBin {
   gint            max_rtcp_rtp_time_diff;
   guint32         max_dropout_time;
   guint32         max_misorder_time;
+  guint           max_streams;
 
   /* a list of session */
   GSList         *sessions;
