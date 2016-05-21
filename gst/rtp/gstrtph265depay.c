@@ -146,7 +146,7 @@ gst_rtp_h265_depay_init (GstRtpH265Depay * rtph265depay)
   rtph265depay->adapter = gst_adapter_new ();
   rtph265depay->picture_adapter = gst_adapter_new ();
   rtph265depay->byte_stream = DEFAULT_BYTE_STREAM;
-  rtph265depay->stream_format = (gchar *) g_malloc (10);
+  rtph265depay->stream_format = (gchar *) g_malloc (12);
   rtph265depay->merge = DEFAULT_ACCESS_UNIT;
   rtph265depay->vps = g_ptr_array_new_with_free_func (
       (GDestroyNotify) gst_buffer_unref);
