@@ -2918,6 +2918,9 @@ rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
           case GST_RTCP_RTPFB_TYPE_NACK:
             rtp_session_process_nack (sess, sender_ssrc, media_ssrc,
                 fci_data, fci_length, current_time);
+            /* FIXME: remove this once NACK works properly */
+            rtp_session_process_pli (sess, sender_ssrc, media_ssrc,
+                fci_data, fci_length, current_time);
             break;
           default:
             break;
