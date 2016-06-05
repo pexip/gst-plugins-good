@@ -112,9 +112,10 @@ gst_vp9_dec_class_init (GstVP9DecClass * klass)
 }
 
 static void
-gst_vp9_dec_init (GstVP9Dec * gst_vp9_dec)
+gst_vp9_dec_init (GstVP9Dec * dec)
 {
-  GST_DEBUG_OBJECT (gst_vp9_dec, "gst_vp9_dec_init");
+  GST_DEBUG_OBJECT (dec, "gst_vp9_dec_init");
+  gst_video_decoder_set_drop_error_frames_early (GST_VIDEO_DECODER (dec), TRUE);
 }
 
 static void
