@@ -312,7 +312,7 @@ check_videomixer =
 endif
 
 if USE_VPX
-check_vpx=elements/vp8enc elements/vp8dec
+check_vpx=elements/vp8enc elements/vp8dec elements/vp9enc
 else
 check_vpx=
 endif
