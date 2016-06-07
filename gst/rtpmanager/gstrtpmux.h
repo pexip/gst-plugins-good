@@ -73,7 +73,6 @@ struct _GstRTPMux
   guint ssrc;
   guint current_ssrc;
   gboolean have_ssrc;
-  gboolean ssrc_random;
 
   GstPad *last_pad; /* protected by object lock */
 
