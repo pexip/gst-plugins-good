@@ -273,6 +273,30 @@ GST_START_TEST (test_h263pdepay_dont_push_empty_frame)
 }
 GST_END_TEST;
 
+GST_START_TEST (test_h263ppay_not_leaking_caps)
+{
+  GstHarness *h;
+  gint i;
+
+  if (!have_element ("avenc_h263p"))
+    return;
+
+  h = gst_harness_new_parse ("rtph263ppay");
+  gst_harness_add_src_parse (h, "videotestsrc is-live=1 ! "
+      "capsfilter caps=\"video/x-raw,format=I420,width=176,height=144\" ! "
+      "avenc_h263p", TRUE);
+
+  gst_harness_set_sink_caps_str (h, "application/x-rtp, clock-rate=[1, MAX]");
+
+  for (i = 0; i < 1; i++)
+    gst_harness_push_from_src (h);
+
+  fail_unless_equals_int (4, gst_harness_buffers_received (h));
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 rtph263_suite (void)
 {
@@ -291,6 +315,9 @@ rtph263_suite (void)
   tcase_add_test (tc_chain, test_h263pdepay_fragmented_memory_non_writable_buffer);
   tcase_add_test (tc_chain, test_h263pdepay_fragmented_memory_non_writable_buffer_split_frame);
   tcase_add_test (tc_chain, test_h263pdepay_dont_push_empty_frame);
+
+  suite_add_tcase (s, (tc_chain = tcase_create ("h263ppay")));
+  tcase_add_test (tc_chain, test_h263ppay_not_leaking_caps);
 
   return s;
 }

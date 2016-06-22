@@ -264,9 +264,11 @@ gst_rtp_h263p_pay_sink_getcaps (GstRTPBasePayload * payload, GstPad * pad,
    * we want it to produce. The second case is simply payloader ! depayloader
    * where we are dealing with the depayloader's template caps. In this case
    * we should accept any input compatible with our sink template caps. */
-  if (!gst_caps_is_fixed (peercaps))
+  if (!gst_caps_is_fixed (peercaps)) {
+    gst_caps_unref (peercaps);
     return
         gst_pad_get_pad_template_caps (GST_RTP_BASE_PAYLOAD_SINKPAD (payload));
+  }
 
   templ = gst_pad_get_pad_template_caps (GST_RTP_BASE_PAYLOAD_SRCPAD (payload));
   intersect = gst_caps_intersect (peercaps, templ);
