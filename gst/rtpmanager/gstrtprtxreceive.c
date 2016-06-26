@@ -494,8 +494,18 @@ gst_rtp_rtx_receive_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
   gboolean is_rtx;
   gboolean drop = FALSE;
 
+  if (rtx->rtx_pt_map_structure == NULL) {
+    GST_DEBUG_OBJECT (pad, "No map set, passthrough");
+    return gst_pad_push (rtx->srcpad, buffer);
+  }
+
   /* map current rtp packet to parse its header */
-  gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp);
+  if (!gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp)) {
+    GST_INFO_OBJECT (pad, "Non RTP packet received, dropping");
+    gst_buffer_unref (buffer);
+    return GST_FLOW_OK;
+  }
+
   ssrc = gst_rtp_buffer_get_ssrc (&rtp);
   seqnum = gst_rtp_buffer_get_seq (&rtp);
   payload_type = gst_rtp_buffer_get_payload_type (&rtp);
