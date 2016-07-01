@@ -4323,15 +4323,18 @@ gst_rtp_jitter_buffer_get_property (GObject * object,
 static GstStructure *
 gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer * jbuf)
 {
+  GstRtpJitterBufferPrivate *priv = jbuf->priv;
   GstStructure *s;
 
-  JBUF_LOCK (jbuf->priv);
+  JBUF_LOCK (priv);
   s = gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-      "rtx-count", G_TYPE_UINT64, jbuf->priv->num_rtx_requests,
-      "rtx-success-count", G_TYPE_UINT64, jbuf->priv->num_rtx_success,
-      "rtx-per-packet", G_TYPE_DOUBLE, jbuf->priv->avg_rtx_num,
-      "rtx-rtt", G_TYPE_UINT64, jbuf->priv->avg_rtx_rtt, NULL);
-  JBUF_UNLOCK (jbuf->priv);
+      "num-late", G_TYPE_UINT64, priv->num_late,
+      "num-duplicates", G_TYPE_UINT64, priv->num_duplicates,
+      "rtx-count", G_TYPE_UINT64, priv->num_rtx_requests,
+      "rtx-success-count", G_TYPE_UINT64, priv->num_rtx_success,
+      "rtx-per-packet", G_TYPE_DOUBLE, priv->avg_rtx_num,
+      "rtx-rtt", G_TYPE_UINT64, priv->avg_rtx_rtt, NULL);
+  JBUF_UNLOCK (priv);
 
   return s;
 }
