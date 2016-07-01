@@ -530,8 +530,8 @@ verify_jb_stats (GstElement * jb, GstStructure * expected)
   ret = gst_structure_is_subset (actual, expected);
 
   if (!ret) {
-    gchar * e_str = gst_structure_to_string (expected);
-    gchar * a_str = gst_structure_to_string (actual);
+    gchar *e_str = gst_structure_to_string (expected);
+    gchar *a_str = gst_structure_to_string (actual);
     fail_unless (ret, "%s is not a subset of %s", e_str, a_str);
     g_free (e_str);
     g_free (a_str);
@@ -622,8 +622,8 @@ GST_START_TEST (test_only_one_lost_event_on_large_gaps)
   gst_buffer_unref (out_buf);
 
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)499, NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 499, NULL)));
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
@@ -713,8 +713,8 @@ GST_START_TEST (test_two_lost_one_arrives_in_time)
   gst_buffer_unref (out_buf);
 
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)1, NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 1, NULL)));
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
@@ -781,8 +781,8 @@ GST_START_TEST (test_late_packets_still_makes_lost_events)
   gst_buffer_unref (out_buf);
 
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)2, NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 2, NULL)));
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
@@ -820,7 +820,7 @@ GST_START_TEST (test_num_late_when_considered_lost_arrives)
     for (gint i = 0; i < 3; i++)
       gst_event_unref (gst_harness_pull_event (h));
 
-    /* we should now receive packet-lost-events for buffer 1*/
+    /* we should now receive packet-lost-events for buffer 1 */
     verify_lost_event (gst_harness_pull_event (h),
         1, 1 * PCMU_BUF_DURATION, PCMU_BUF_DURATION);
   }
@@ -831,10 +831,9 @@ GST_START_TEST (test_num_late_when_considered_lost_arrives)
 
   /* we have one lost packet in the stats */
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)1,
-          "num-late", G_TYPE_UINT64, (guint64)0,
-          NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 1,
+              "num-late", G_TYPE_UINT64, (guint64) 0, NULL)));
 
   /* buffer 1 now arrives (too late) */
   fail_unless_equals_int (GST_FLOW_OK,
@@ -842,10 +841,9 @@ GST_START_TEST (test_num_late_when_considered_lost_arrives)
 
   /* and this increments num-late */
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)1,
-          "num-late", G_TYPE_UINT64, (guint64)1,
-          NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 1,
+              "num-late", G_TYPE_UINT64, (guint64) 1, NULL)));
 
   gst_harness_teardown (h);
 }
@@ -1113,12 +1111,11 @@ GST_START_TEST (test_rtx_two_missing)
   fail_unless_equals_int (0, gst_harness_events_in_queue (h));
 
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)1,
-          "rtx-count", G_TYPE_UINT64, (guint64)5,
-          "rtx-success-count", G_TYPE_UINT64, (guint64)1,
-          "rtx-rtt", G_TYPE_UINT64, (guint64)0,
-           NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 1,
+              "rtx-count", G_TYPE_UINT64, (guint64) 5,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 1,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) 0, NULL)));
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
@@ -1478,9 +1475,8 @@ GST_START_TEST (test_dts_gap_larger_than_latency)
   }
 
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)4,
-           NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 4, NULL)));
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
@@ -1615,10 +1611,9 @@ GST_START_TEST (test_considered_lost_packet_in_large_gap_arrives)
 
   /* we have lost 3, and one of them arrived eventually, but too late */
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)3,
-          "num-late", G_TYPE_UINT64, (guint64)1,
-           NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 3,
+              "num-late", G_TYPE_UINT64, (guint64) 1, NULL)));
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
