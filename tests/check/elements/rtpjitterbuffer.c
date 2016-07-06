@@ -5,7 +5,7 @@
  * Copyright (C) 2012 Cisco Systems, Inc
  *               Authors: Kelley Rogers <kelro@cisco.com>
  *               Havard Graff <hgraff@cisco.com>
- * Copyright (C) 2013-2015 Pexip AS
+ * Copyright (C) 2013-2016 Pexip AS
  *               Stian Selnes <stian@pexip>
  *               Havard Graff <havard@pexip>
  *
@@ -445,6 +445,15 @@ generate_test_buffer (guint seq_num)
 {
   return generate_test_buffer_full (seq_num * PCMU_BUF_DURATION,
       TRUE, seq_num, seq_num * PCMU_RTP_TS_DURATION);
+}
+
+static GstBuffer *
+generate_test_buffer_rtx (GstClockTime dts, guint seq_num)
+{
+  GstBuffer *buffer = generate_test_buffer_full (dts, TRUE, seq_num,
+      seq_num * PCMU_RTP_TS_DURATION);
+  GST_BUFFER_FLAG_SET (buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION);
+  return buffer;
 }
 
 static gint
@@ -1068,7 +1077,9 @@ GST_START_TEST (test_rtx_two_missing)
 
   /* make buffer 3 */
   fail_unless_equals_int (GST_FLOW_OK,
-      gst_harness_push (h, generate_test_buffer (3)));
+      gst_harness_push (h,
+          generate_test_buffer_rtx (gst_clock_get_time (GST_CLOCK (testclock)),
+              3)));
 
   /* make more buffers */
   for (i = 5; i < 15; i++) {
@@ -1250,6 +1261,348 @@ GST_START_TEST (test_rtx_packet_delay)
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtx_buffer_arrives_just_in_time)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstTestClock *testclock;
+  gint latency_ms = 5 * PCMU_BUF_MS;
+  GstBuffer *buffer;
+  GstClockTime now, last_rtx_request;
+
+  testclock = gst_harness_get_testclock (h);
+  gst_harness_set_src_caps (h, generate_caps ());
+  g_object_set (h->element, "do-retransmission", TRUE, "latency", latency_ms,
+      NULL);
+
+  /* Push/pull buffers and advance time past buffer 0's timeout (in order to
+   * simplify the test) */
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++) {
+    gst_test_clock_set_time (testclock, i * PCMU_BUF_DURATION);
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_harness_push (h, generate_test_buffer (i)));
+    gst_harness_wait_for_clock_id_waits (h, 1, 60);
+  }
+
+  gst_harness_crank_single_clock_wait (h);
+  fail_unless_equals_int64 (latency_ms * GST_MSECOND,
+      gst_clock_get_time (GST_CLOCK (testclock)));
+
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++)
+    gst_buffer_unref (gst_harness_pull (h));
+
+  /* drop reconfigure event */
+  gst_event_unref (gst_harness_pull_upstream_event (h));
+
+  /* Crank clock to send retransmission events requesting seqnum 6 which has
+   * not arrived yet. */
+  for (gint i = 0; i < 2; i++) {
+    gst_harness_crank_single_clock_wait (h);
+    verify_rtx_event (gst_harness_pull_upstream_event (h),
+        6, 6 * PCMU_BUF_DURATION, 10 + 40 * i, PCMU_BUF_DURATION);
+  }
+
+  last_rtx_request = gst_clock_get_time (GST_CLOCK (testclock));
+  fail_unless_equals_int64 (last_rtx_request, 170 * GST_MSECOND);
+
+  /* seqnum 6 arrives just before it times out and is considered lost */
+  now = 200 * GST_MSECOND;
+  gst_test_clock_set_time (testclock, now);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_rtx (now, 6)));
+  buffer = gst_harness_pull (h);
+  fail_unless_equals_int (6, get_rtp_seq_num (buffer));
+  gst_buffer_unref (buffer);
+
+  fail_unless (verify_jb_stats (h->element,
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 0,
+              "rtx-count", G_TYPE_UINT64, (guint64) 2,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 1,
+              "rtx-per-packet", G_TYPE_DOUBLE, 2.0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) (now - last_rtx_request),
+              NULL)));
+
+  gst_object_unref (testclock);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtx_buffer_arrives_too_late)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstTestClock *testclock;
+  gint latency_ms = 5 * PCMU_BUF_MS;
+  GstClockTime now, last_rtx_request;
+
+  testclock = gst_harness_get_testclock (h);
+  gst_harness_set_src_caps (h, generate_caps ());
+  g_object_set (h->element, "do-retransmission", TRUE, "latency", latency_ms,
+      "do-lost", TRUE, NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
+  /* Push/pull buffers and advance time past buffer 0's timeout (in order to
+   * simplify the test) */
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++) {
+    gst_test_clock_set_time (testclock, i * PCMU_BUF_DURATION);
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_harness_push (h, generate_test_buffer (i)));
+    gst_harness_wait_for_clock_id_waits (h, 1, 60);
+  }
+
+  gst_harness_crank_single_clock_wait (h);
+  fail_unless_equals_int64 (latency_ms * GST_MSECOND,
+      gst_clock_get_time (GST_CLOCK (testclock)));
+
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++)
+    gst_buffer_unref (gst_harness_pull (h));
+
+  /* drop reconfigure event */
+  gst_event_unref (gst_harness_pull_upstream_event (h));
+  /* drop GstEventStreamStart & GstEventCaps & GstEventSegment */
+  for (gint i = 0; i < 3; i++)
+    gst_event_unref (gst_harness_pull_event (h));
+
+  /* Crank clock to send retransmission events requesting seqnum 6 which has
+   * not arrived yet. */
+  for (gint i = 0; i < 2; i++) {
+    gst_harness_crank_single_clock_wait (h);
+    verify_rtx_event (gst_harness_pull_upstream_event (h),
+        6, 6 * PCMU_BUF_DURATION, 10 + 40 * i, PCMU_BUF_DURATION);
+  }
+
+  last_rtx_request = gst_clock_get_time (GST_CLOCK (testclock));
+  fail_unless_equals_int64 (last_rtx_request, 170 * GST_MSECOND);
+
+  /* seqnum 6 is considered lost */
+  gst_harness_crank_single_clock_wait (h);
+  verify_lost_event (gst_harness_pull_event (h), 6,
+      6 * PCMU_BUF_DURATION, PCMU_BUF_DURATION);
+
+  /* seqnum 6 arrives too late */
+  now = gst_clock_get_time (GST_CLOCK (testclock));
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_rtx (now, 6)));
+
+  fail_unless (verify_jb_stats (h->element,
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 1,
+              "num-late", G_TYPE_UINT64, (guint64) 1,
+              "num-duplicates", G_TYPE_UINT64, (guint64) 0,
+              "rtx-count", G_TYPE_UINT64, (guint64) 2,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 0,
+              "rtx-per-packet", G_TYPE_DOUBLE, 2.0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) (now - last_rtx_request),
+              NULL)));
+
+  gst_object_unref (testclock);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtx_original_buffer_does_not_update_rtx_stats)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstTestClock *testclock;
+  gint latency_ms = 5 * PCMU_BUF_MS;
+  GstBuffer *buffer;
+  GstClockTime now, last_rtx_request;
+
+  testclock = gst_harness_get_testclock (h);
+  gst_harness_set_src_caps (h, generate_caps ());
+  g_object_set (h->element, "do-retransmission", TRUE, "latency", latency_ms,
+      NULL);
+
+  /* Push/pull buffers and advance time past buffer 0's timeout (in order to
+   * simplify the test) */
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++) {
+    gst_test_clock_set_time (testclock, i * PCMU_BUF_DURATION);
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_harness_push (h, generate_test_buffer (i)));
+    gst_harness_wait_for_clock_id_waits (h, 1, 60);
+  }
+
+  gst_harness_crank_single_clock_wait (h);
+  fail_unless_equals_int64 (latency_ms * GST_MSECOND,
+      gst_clock_get_time (GST_CLOCK (testclock)));
+
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++)
+    gst_buffer_unref (gst_harness_pull (h));
+
+  /* drop reconfigure event */
+  gst_event_unref (gst_harness_pull_upstream_event (h));
+
+  /* Crank clock to send retransmission events requesting seqnum 6 which has
+   * not arrived yet. */
+  for (gint i = 0; i < 2; i++) {
+    gst_harness_crank_single_clock_wait (h);
+    verify_rtx_event (gst_harness_pull_upstream_event (h),
+        6, 6 * PCMU_BUF_DURATION, 10 + 40 * i, PCMU_BUF_DURATION);
+  }
+
+  last_rtx_request = gst_clock_get_time (GST_CLOCK (testclock));
+  fail_unless_equals_int64 (last_rtx_request, 170 * GST_MSECOND);
+
+  /* ORIGINAL seqnum 6 arrives just before it times out and is considered
+   * lost. */
+  now = 200 * GST_MSECOND;
+  gst_test_clock_set_time (testclock, now);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_full (now, TRUE, 6, 6 * PCMU_RTP_TS_DURATION)));
+  buffer = gst_harness_pull (h);
+  fail_unless_equals_int (6, get_rtp_seq_num (buffer));
+  gst_buffer_unref (buffer);
+
+  /* The original buffer does not count in the RTX stats. */
+  fail_unless (verify_jb_stats (h->element,
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 0,
+              "num-late", G_TYPE_UINT64, (guint64) 0,
+              "num-duplicates", G_TYPE_UINT64, (guint64) 0,
+              "rtx-count", G_TYPE_UINT64, (guint64) 2,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 0,
+              "rtx-per-packet", G_TYPE_DOUBLE, 0.0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) 0, NULL)));
+
+  /* Now the retransmitted packet arrives and stats should be updated. Note
+   * that the buffer arrives in time and should not be considered late, but
+   * a duplicate. */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_rtx (now, 6)));
+  fail_unless (verify_jb_stats (h->element,
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 0,
+              "num-late", G_TYPE_UINT64, (guint64) 0,
+              "num-duplicates", G_TYPE_UINT64, (guint64) 1,
+              "rtx-count", G_TYPE_UINT64, (guint64) 2,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 0,
+              "rtx-per-packet", G_TYPE_DOUBLE, 2.0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) (now - last_rtx_request),
+              NULL)));
+
+  gst_object_unref (testclock);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtx_duplicate_packet_updates_rtx_stats)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstTestClock *testclock;
+  gint latency_ms = 5 * PCMU_BUF_MS;
+  GstClockTime now, rtx_request_6, rtx_request_7;
+
+  testclock = gst_harness_get_testclock (h);
+  gst_harness_set_src_caps (h, generate_caps ());
+  g_object_set (h->element, "do-retransmission", TRUE, "latency", latency_ms,
+      NULL);
+
+  /* Push/pull buffers and advance time past buffer 0's timeout (in order to
+   * simplify the test) */
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++) {
+    gst_test_clock_set_time (testclock, i * PCMU_BUF_DURATION);
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_harness_push (h, generate_test_buffer (i)));
+    gst_harness_wait_for_clock_id_waits (h, 1, 60);
+  }
+
+  gst_harness_crank_single_clock_wait (h);
+  fail_unless_equals_int64 (latency_ms * GST_MSECOND,
+      gst_clock_get_time (GST_CLOCK (testclock)));
+
+  for (gint i = 0; i <= latency_ms / PCMU_BUF_MS; i++)
+    gst_buffer_unref (gst_harness_pull (h));
+
+  /* Drop reconfigure event */
+  gst_event_unref (gst_harness_pull_upstream_event (h));
+
+  /* Push packet 8 so that 6 and 7 is missing */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h, generate_test_buffer (8)));
+
+  /* Wait for NACKs on 6 and 7 */
+  gst_harness_crank_single_clock_wait (h);
+  verify_rtx_event (gst_harness_pull_upstream_event (h),
+      6, 6 * PCMU_BUF_DURATION, 10, PCMU_BUF_DURATION);
+  rtx_request_6 = gst_clock_get_time (GST_CLOCK (testclock));
+  fail_unless_equals_int64 (rtx_request_6, 130 * GST_MSECOND);
+
+  gst_harness_crank_single_clock_wait (h);
+  verify_rtx_event (gst_harness_pull_upstream_event (h),
+      7, 7 * PCMU_BUF_DURATION, 0, PCMU_BUF_DURATION);
+  rtx_request_7 = gst_clock_get_time (GST_CLOCK (testclock));
+  fail_unless_equals_int64 (rtx_request_7, 140 * GST_MSECOND);
+
+  /* Original packet 7 arrives */
+  now = 150 * GST_MSECOND;
+  gst_test_clock_set_time (testclock, now);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_full (now, TRUE, 7, 7 * PCMU_RTP_TS_DURATION)));
+
+  /* We're still waiting for packet 6, so 7 should not be pushed */
+  gst_harness_wait_for_clock_id_waits (h, 1, 60);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 0);
+
+  /* The original buffer does not count in the RTX stats. */
+  fail_unless (verify_jb_stats (h->element,
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 0,
+              "num-late", G_TYPE_UINT64, (guint64) 0,
+              "num-duplicates", G_TYPE_UINT64, (guint64) 0,
+              "rtx-count", G_TYPE_UINT64, (guint64) 2,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 0,
+              "rtx-per-packet", G_TYPE_DOUBLE, 0.0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) 0, NULL)));
+
+  /* Push RTX packet 7. Should be dropped as duplicate but update RTX stats. */
+  now = 160 * GST_MSECOND;
+  gst_test_clock_set_time (testclock, now);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_rtx (now, 7)));
+  gst_harness_wait_for_clock_id_waits (h, 1, 60);
+  fail_unless_equals_int (gst_harness_buffers_in_queue (h), 0);
+
+  /* Check RTX stats with updated num-duplicates and rtx-rtt fields */
+  fail_unless (verify_jb_stats (h->element,
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 0,
+              "num-late", G_TYPE_UINT64, (guint64) 0,
+              "num-duplicates", G_TYPE_UINT64, (guint64) 1,
+              "rtx-count", G_TYPE_UINT64, (guint64) 2,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 0,
+              "rtx-per-packet", G_TYPE_DOUBLE, 1.0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) (now - rtx_request_7),
+              NULL)));
+
+  /* RTX packet 6 arrives, both 6 and 7 is ready to be pulled */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer_rtx (now, 6)));
+  gst_buffer_unref (gst_harness_pull (h));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* RTX stats is updated with success count increased. */
+  fail_unless (verify_jb_stats (h->element,
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 0,
+              "num-late", G_TYPE_UINT64, (guint64) 0,
+              "num-duplicates", G_TYPE_UINT64, (guint64) 1,
+              "rtx-count", G_TYPE_UINT64, (guint64) 2,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 1,
+              "rtx-per-packet", G_TYPE_DOUBLE, 1.0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64)
+              /* Use the rtx-rtt formula. Can be subject to change though. */
+              ((now - rtx_request_6) + 7 * (now - rtx_request_7)) / 8, NULL)));
+
+  gst_object_unref (testclock);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_gap_exceeds_latency)
 {
   GstHarness *h = gst_harness_new ("rtpjitterbuffer");
@@ -1377,12 +1730,11 @@ GST_START_TEST (test_gap_exceeds_latency)
   fail_unless_equals_int (0, gst_harness_buffers_in_queue (h));
 
   fail_unless (verify_jb_stats (h->element,
-      gst_structure_new ("application/x-rtp-jitterbuffer-stats",
-          "num-lost", G_TYPE_UINT64, (guint64)7,
-          "rtx-count", G_TYPE_UINT64, (guint64)21,
-          "rtx-success-count", G_TYPE_UINT64, (guint64)5,
-          "rtx-rtt", G_TYPE_UINT64, (guint64)0,
-           NULL)));
+          gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+              "num-lost", G_TYPE_UINT64, (guint64) 7,
+              "rtx-count", G_TYPE_UINT64, (guint64) 21,
+              "rtx-success-count", G_TYPE_UINT64, (guint64) 0,
+              "rtx-rtt", G_TYPE_UINT64, (guint64) 0, NULL)));
 
   gst_object_unref (testclock);
   gst_harness_teardown (h);
@@ -1654,6 +2006,40 @@ GST_START_TEST (test_latency_changed_event)
 
 GST_END_TEST;
 
+GST_START_TEST (test_performance)
+{
+  GstHarness *h =
+      gst_harness_new_parse
+      ("rtpjitterbuffer do-lost=1 do-retransmission=1 latency=1000");
+  GTimer *timer = g_timer_new ();
+  const gdouble test_duration = 2.0;
+  guint buffers_pushed = 0;
+  guint buffers_received;
+
+  gst_harness_set_src_caps (h, generate_caps ());
+  gst_harness_use_systemclock (h);
+
+  while (g_timer_elapsed (timer, NULL) < test_duration) {
+    /* Simulate 1ms packets */
+    guint n = buffers_pushed * 2;       // every packet also produces a gap
+    guint16 seqnum = n & 0xffff;
+    guint32 rtp_ts = n * 8;
+    GstClockTime dts = n * GST_MSECOND;
+    gst_harness_push (h, generate_test_buffer_full (dts, TRUE, seqnum, rtp_ts));
+    buffers_pushed++;
+    g_usleep (G_USEC_PER_SEC / 10000);
+  }
+  g_timer_destroy (timer);
+
+  buffers_received = gst_harness_buffers_received (h);
+  GST_INFO ("Pushed %d, received %d (%.1f%%)", buffers_pushed, buffers_received,
+      100.0 * buffers_received / buffers_pushed);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpjitterbuffer_suite (void)
 {
@@ -1666,15 +2052,22 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_push_unordered);
   tcase_add_test (tc_chain, test_basetime);
   tcase_add_test (tc_chain, test_clear_pt_map);
+
   tcase_add_test (tc_chain, test_only_one_lost_event_on_large_gaps);
   tcase_add_test (tc_chain, test_two_lost_one_arrives_in_time);
   tcase_add_test (tc_chain, test_late_packets_still_makes_lost_events);
   tcase_add_test (tc_chain, test_all_packets_are_timestamped_zero);
   tcase_add_loop_test (tc_chain, test_num_late_when_considered_lost_arrives, 0,
       2);
+
   tcase_add_test (tc_chain, test_rtx_expected_next);
   tcase_add_test (tc_chain, test_rtx_two_missing);
   tcase_add_test (tc_chain, test_rtx_packet_delay);
+  tcase_add_test (tc_chain, test_rtx_buffer_arrives_just_in_time);
+  tcase_add_test (tc_chain, test_rtx_buffer_arrives_too_late);
+  tcase_add_test (tc_chain, test_rtx_original_buffer_does_not_update_rtx_stats);
+  tcase_add_test (tc_chain, test_rtx_duplicate_packet_updates_rtx_stats);
+
   tcase_add_test (tc_chain, test_gap_exceeds_latency);
   tcase_add_test (tc_chain, test_deadline_ts_offset);
   tcase_add_test (tc_chain, test_dts_gap_larger_than_latency);
@@ -1685,6 +2078,8 @@ rtpjitterbuffer_suite (void)
       G_N_ELEMENTS (test_considered_lost_packet_in_large_gap_arrives_input));
 
   tcase_add_test (tc_chain, test_latency_changed_event);
+
+  tcase_add_test (tc_chain, test_performance);
 
   return s;
 }
