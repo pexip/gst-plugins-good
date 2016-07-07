@@ -375,6 +375,10 @@ typedef struct
   guint num_rtx_retry;
 } TimerData;
 
+static GstClockTime
+get_timeout (GstRtpJitterBuffer * jitterbuffer, const TimerData * timer);
+
+
 #define GST_RTP_JITTER_BUFFER_GET_PRIVATE(o) \
   (G_TYPE_INSTANCE_GET_PRIVATE ((o), GST_TYPE_RTP_JITTER_BUFFER, \
                                 GstRtpJitterBufferPrivate))
@@ -505,6 +509,51 @@ static void
 timer_free (TimerData * timer)
 {
   g_slice_free (TimerData, timer);
+}
+
+static void
+list_timers (GstRtpJitterBuffer *jitterbuffer)
+{
+#if 0
+  GSequenceIter *iter = g_sequence_get_begin_iter (jitterbuffer->priv->timers);
+  GSequenceIter *end = g_sequence_get_end_iter (jitterbuffer->priv->timers);
+  while (iter != end) {
+    TimerData *timer = g_sequence_get (iter);
+    GstClockTime timer_timeout = get_timeout (jitterbuffer, timer);
+    GST_DEBUG_OBJECT (jitterbuffer,
+        "LISTING %d, %d, %" GST_TIME_FORMAT,
+        timer->type, timer->seqnum, GST_TIME_ARGS (timer_timeout));
+    iter = g_sequence_iter_next (iter);
+  }
+#else
+  return;
+#endif
+}
+
+static gint
+timer_compare_timeout_seqnum (gconstpointer timer_a, gconstpointer timer_b,
+    gpointer user_data)
+{
+  GstRtpJitterBuffer *jitterbuffer = user_data;
+  const TimerData *a = timer_a;
+  const TimerData *b = timer_b;
+  GstClockTime time_a = get_timeout (jitterbuffer, timer_a);
+  GstClockTime time_b = get_timeout (jitterbuffer, timer_b);
+  GstClockTimeDiff diff = GST_CLOCK_DIFF (time_b, time_a);
+
+  GST_DEBUG ("a: %" GST_TIME_FORMAT ", b: %" GST_TIME_FORMAT,
+      GST_TIME_ARGS (time_a), GST_TIME_ARGS (time_b));
+
+  if (diff == 0)
+    return gst_rtp_buffer_compare_seqnum (b->seqnum, a->seqnum);
+  else if (time_a == GST_CLOCK_TIME_NONE)
+    return -1;
+  else if (time_b == GST_CLOCK_TIME_NONE)
+    return 1;
+  else if (diff < 0)
+    return -1;
+  else
+    return 1;
 }
 
 static void
@@ -1987,7 +2036,7 @@ unschedule_current_timer (GstRtpJitterBuffer * jitterbuffer)
 }
 
 static GstClockTime
-get_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
+get_timeout (GstRtpJitterBuffer * jitterbuffer, const TimerData * timer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GstClockTime test_timeout;
@@ -2035,7 +2084,9 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
       GST_TIME_ARGS (delay));
 
   timer = timer_new (type, seqnum, num, timeout, delay, duration);
-  iter = g_sequence_append (priv->timers, timer);;
+  iter = g_sequence_insert_sorted (priv->timers, timer, timer_compare_timeout_seqnum, jitterbuffer);
+  GST_DEBUG_OBJECT (jitterbuffer, "list timers");
+  list_timers (jitterbuffer);
   recalculate_timer (jitterbuffer, iter);
   JBUF_SIGNAL_TIMER (priv);
 }
@@ -2048,9 +2099,10 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, GSequenceIter * iter,
   gboolean seqchange, timechange;
   guint16 oldseq;
   TimerData * timer = g_sequence_get (iter);
+  gboolean timechange2 = timer->timeout != (timeout + delay);
 
   seqchange = timer->seqnum != seqnum;
-  timechange = timer->timeout != timeout;
+  timechange = timer->timeout != timeout; // FIXME: +delay
 
   if (!seqchange && !timechange)
     return;
@@ -2080,6 +2132,13 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, GSequenceIter * iter,
      * for and unschedule if so */
     else if (timechange)
       recalculate_timer (jitterbuffer, iter);
+  }
+
+  /* FIXME: Not call this always */
+  if (timechange2) {
+    g_sequence_sort_changed (iter, timer_compare_timeout_seqnum, jitterbuffer);
+    GST_DEBUG_OBJECT (jitterbuffer, "list timers");
+    list_timers (jitterbuffer);
   }
 }
 
@@ -3681,8 +3740,7 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
   JBUF_LOCK (priv);
   while (priv->timer_running) {
     TimerData *timer = NULL;
-    GstClockTime timer_timeout = -1;
-    GSequenceIter *iter, *end, *timer_iter;
+    GSequenceIter *iter, *end;
 
     /* If we have a clock, update "now" now with the very
      * latest running time we have. If timers are unscheduled below we
@@ -3701,71 +3759,47 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
     GST_DEBUG_OBJECT (jitterbuffer, "now %" GST_TIME_FORMAT,
         GST_TIME_ARGS (now));
 
+    list_timers (jitterbuffer);
+    /* Weed out anything too late */
     iter = g_sequence_get_begin_iter (priv->timers);
     end = g_sequence_get_end_iter (priv->timers);
     while (iter != end) {
       TimerData *test = g_sequence_get (iter);
       GSequenceIter *next = g_sequence_iter_next (iter);
       GstClockTime test_timeout = get_timeout (jitterbuffer, test);
-      gboolean save_best = FALSE;
 
-      GST_DEBUG_OBJECT (jitterbuffer,
-          "%d, %d, %" GST_TIME_FORMAT " diff:%" GST_STIME_FORMAT,
-          test->type, test->seqnum, GST_TIME_ARGS (test_timeout),
-          GST_STIME_ARGS ((gint64) (test_timeout - now)));
+      if (GST_CLOCK_TIME_IS_VALID (test_timeout) && test_timeout > now)
+        break;
 
-      /* Weed out anything too late */
-      if (test->type == TIMER_TYPE_LOST &&
-          (test_timeout == -1 || test_timeout <= now)) {
+      if (test->type == TIMER_TYPE_LOST) {
         GST_DEBUG_OBJECT (jitterbuffer, "Weeding out late entry");
         do_lost_timeout (jitterbuffer, iter, now);
-        if (!priv->timer_running)
-          break;
-      } else {
-        /* find the smallest timeout */
-        if (timer == NULL) {
-          save_best = TRUE;
-        } else if (timer_timeout == -1) {
-          /* we already have an immediate timeout, the new timer must be an
-           * immediate timer with smaller seqnum to become the best */
-          if (test_timeout == -1
-              && (gst_rtp_buffer_compare_seqnum (test->seqnum,
-                      timer->seqnum) > 0))
-            save_best = TRUE;
-        } else if (test_timeout == -1) {
-          /* first immediate timer */
-          save_best = TRUE;
-        } else if (test_timeout < timer_timeout) {
-          /* earlier timer */
-          save_best = TRUE;
-        } else if (test_timeout == timer_timeout
-            && (gst_rtp_buffer_compare_seqnum (test->seqnum,
-                    timer->seqnum) > 0)) {
-          /* same timer, smaller seqnum */
-          save_best = TRUE;
-        }
-
-        if (save_best) {
-          GST_DEBUG_OBJECT (jitterbuffer, "new best");
-          timer = test;
-          timer_iter = iter;
-          timer_timeout = test_timeout;
-        }
       }
       iter = next;
     }
+
+    /* Get timer with smallest timeout and seqnum */
+    iter = g_sequence_get_begin_iter (priv->timers);
+    timer = iter != end ? g_sequence_get (iter) : NULL;
+
     if (timer && !priv->blocked) {
       GstClock *clock;
       GstClockTime sync_time;
       GstClockID id;
       GstClockReturn ret;
       GstClockTimeDiff clock_jitter;
+      GstClockTime timer_timeout = get_timeout (jitterbuffer, timer);
+
+      GST_DEBUG_OBJECT (jitterbuffer,
+          "%d, %d, %" GST_TIME_FORMAT " diff:%" GST_STIME_FORMAT,
+          timer->type, timer->seqnum, GST_TIME_ARGS (timer_timeout),
+          GST_STIME_ARGS ((gint64) (timer_timeout - now)));
 
       if (timer_timeout == -1 || timer_timeout <= now) {
         /* We have normally removed all lost timers in the loop above */
         g_assert (timer->type != TIMER_TYPE_LOST);
 
-        do_timeout (jitterbuffer, timer_iter, now);
+        do_timeout (jitterbuffer, iter, now);
         /* check here, do_timeout could have released the lock */
         if (!priv->timer_running)
           break;
