@@ -2164,7 +2164,7 @@ already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
  */
 static void
 update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
-    GstClockTime dts, gboolean do_next_seqnum)
+    GstClockTime dts, gboolean do_next_seqnum, gboolean is_rtx)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   TimerData *timer = NULL;
@@ -2203,12 +2203,23 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 
   if (timer && timer->type != TIMER_TYPE_DEADLINE) {
     if (timer->num_rtx_retry > 0) {
-      update_rtx_stats (jitterbuffer, timer, dts, TRUE);
+      if (is_rtx) {
+        update_rtx_stats (jitterbuffer, timer, dts, TRUE);
 
-      /* don't try to estimate the next seqnum because this is a retransmitted
-       * packet and it probably did not arrive with the expected packet
-       * spacing. */
-      do_next_seqnum = FALSE;
+        /* don't try to estimate the next seqnum because this is a retransmitted
+         * packet and it probably did not arrive with the expected packet
+         * spacing. */
+        do_next_seqnum = FALSE;
+      } else {
+        /* Schedule a ZOMBIE timer in order to record stats when/if the
+         * retransmitted packet arrives */
+        GST_DEBUG_OBJECT (jitterbuffer, "Reschedule as ZOMBIE timer");
+        timer->type = TIMER_TYPE_ZOMBIE;
+        reschedule_timer (jitterbuffer, timer, timer->seqnum,
+            dts + priv->rtx_stats_timeout * GST_MSECOND, 0, FALSE);
+        /* Set timer to NULL to avoid rescheduling again */
+        timer = NULL;
+      }
     }
   }
 
@@ -2841,7 +2852,9 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
 
         timer = find_timer (jitterbuffer, seqnum);
         if (timer) {
-          update_rtx_stats (jitterbuffer, timer, dts, FALSE);
+          if (GST_BUFFER_FLAG_IS_SET (buffer,
+                  GST_RTP_BUFFER_FLAG_RETRANSMISSION))
+            update_rtx_stats (jitterbuffer, timer, dts, FALSE);
           remove_timer (jitterbuffer, timer);
         }
       }
@@ -2898,7 +2911,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     goto duplicate;
 
   /* update timers */
-  update_timers (jitterbuffer, seqnum, dts, do_next_seqnum);
+  update_timers (jitterbuffer, seqnum, dts, do_next_seqnum,
+      GST_BUFFER_FLAG_IS_SET (buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION));
 
   /* we had an unhandled SR, handle it now */
   if (priv->last_sr)
