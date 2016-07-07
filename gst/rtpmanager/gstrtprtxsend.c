@@ -112,6 +112,14 @@ typedef struct
   GstBuffer *buffer;
 } BufferQueueItem;
 
+typedef struct
+{
+  GstDataQueueItem item;
+  GstCaps *rtx_caps;
+} RtxDataQueueItem;
+
+#define IS_RTX_ENABLED(rtx) (g_hash_table_size ((rtx)->rtx_pt_map) > 0)
+
 static void
 buffer_queue_item_free (BufferQueueItem * item)
 {
@@ -122,6 +130,7 @@ buffer_queue_item_free (BufferQueueItem * item)
 typedef struct
 {
   guint32 rtx_ssrc;
+  GstCaps *rtx_caps;
   guint16 seqnum_base, next_seqnum;
   gint clock_rate;
 
@@ -130,20 +139,29 @@ typedef struct
 } SSRCRtxData;
 
 static SSRCRtxData *
-ssrc_rtx_data_new (guint32 rtx_ssrc)
+ssrc_rtx_data_new (guint32 rtx_ssrc, guint rtx_payload_type,
+    const GstCaps * master_stream_caps)
 {
+  GstStructure *s = gst_caps_get_structure (master_stream_caps, 0);
   SSRCRtxData *data = g_slice_new0 (SSRCRtxData);
-
   data->rtx_ssrc = rtx_ssrc;
   data->next_seqnum = data->seqnum_base = g_random_int_range (0, G_MAXUINT16);
   data->queue = g_sequence_new ((GDestroyNotify) buffer_queue_item_free);
 
+  gst_structure_get_int (s, "clock-rate", &data->clock_rate);
+
+  data->rtx_caps = gst_caps_copy (master_stream_caps);
+  gst_caps_set_simple (data->rtx_caps,
+      "ssrc", G_TYPE_UINT, data->rtx_ssrc,
+      "seqnum-offset", G_TYPE_UINT, data->seqnum_base,
+      "payload", G_TYPE_INT, rtx_payload_type, NULL);
   return data;
 }
 
 static void
 ssrc_rtx_data_free (SSRCRtxData * data)
 {
+  gst_caps_unref (data->rtx_caps);
   g_sequence_free (data->queue);
   g_slice_free (SSRCRtxData, data);
 }
@@ -237,6 +255,10 @@ gst_rtp_rtx_send_finalize (GObject * object)
   g_hash_table_unref (rtx->clock_rate_map);
   if (rtx->clock_rate_map_structure)
     gst_structure_free (rtx->clock_rate_map_structure);
+  if (rtx->master_stream_caps)
+    gst_caps_unref (rtx->master_stream_caps);
+  if (rtx->rtx_stream_caps)
+    gst_caps_unref (rtx->rtx_stream_caps);
   g_object_unref (rtx->queue);
 
   G_OBJECT_CLASS (gst_rtp_rtx_send_parent_class)->finalize (object);
@@ -302,29 +324,34 @@ gst_rtp_rtx_send_queue_check_full (GstDataQueue * queue,
 static void
 gst_rtp_rtx_data_queue_item_free (gpointer item)
 {
-  GstDataQueueItem *data = item;
-  if (data->object)
-    gst_mini_object_unref (data->object);
-  g_slice_free (GstDataQueueItem, data);
+  RtxDataQueueItem *data = item;
+  if (data->item.object)
+    gst_mini_object_unref (data->item.object);
+  if (data->rtx_caps)
+    gst_caps_unref (data->rtx_caps);
+  g_slice_free (RtxDataQueueItem, data);
 }
 
 static gboolean
-gst_rtp_rtx_send_push_out (GstRtpRtxSend * rtx, gpointer object)
+gst_rtp_rtx_send_push_out (GstRtpRtxSend * rtx, gpointer object,
+    GstCaps * rtx_caps)
 {
-  GstDataQueueItem *data;
+  RtxDataQueueItem *data;
+  GstDataQueueItem *gstdata;
   gboolean success;
 
-  data = g_slice_new0 (GstDataQueueItem);
-  data->object = GST_MINI_OBJECT (object);
-  data->size = 1;
-  data->duration = 1;
-  data->visible = TRUE;
-  data->destroy = gst_rtp_rtx_data_queue_item_free;
+  data = g_slice_new0 (RtxDataQueueItem);
+  gstdata = (GstDataQueueItem *) data;
+  gstdata->object = GST_MINI_OBJECT (object);
+  gstdata->size = 1;
+  gstdata->duration = 1;
+  gstdata->visible = TRUE;
+  gstdata->destroy = gst_rtp_rtx_data_queue_item_free;
+  data->rtx_caps = rtx_caps;
 
-  success = gst_data_queue_push (rtx->queue, data);
-
+  success = gst_data_queue_push (rtx->queue, gstdata);
   if (!success)
-    data->destroy (data);
+    gstdata->destroy (gstdata);
 
   return success;
 }
@@ -345,29 +372,44 @@ gst_rtp_rtx_send_choose_ssrc (GstRtpRtxSend * rtx, guint32 choice,
 }
 
 static SSRCRtxData *
-gst_rtp_rtx_send_get_ssrc_data (GstRtpRtxSend * rtx, guint32 ssrc)
+gst_rtp_rtx_send_new_ssrc_data (GstRtpRtxSend * rtx, guint32 ssrc,
+    guint payload_type)
 {
-  SSRCRtxData *data;
-  guint32 rtx_ssrc = 0;
   gboolean consider = FALSE;
+  guint32 rtx_ssrc = 0;
+  guint32 consider_ssrc = 0;
+  SSRCRtxData *data = NULL;
+  GstCaps *current_caps = gst_pad_get_current_caps (rtx->sinkpad);
+  guint rtx_payload_type =
+      GPOINTER_TO_UINT (g_hash_table_lookup (rtx->rtx_pt_map,
+          GUINT_TO_POINTER (payload_type)));
 
-  if (G_UNLIKELY (!g_hash_table_contains (rtx->ssrc_data,
-              GUINT_TO_POINTER (ssrc)))) {
-    if (rtx->external_ssrc_map) {
-      gchar *ssrc_str;
-      ssrc_str = g_strdup_printf ("%" G_GUINT32_FORMAT, ssrc);
-      consider = gst_structure_get_uint (rtx->external_ssrc_map, ssrc_str,
-          &rtx_ssrc);
-      g_free (ssrc_str);
-    }
-    rtx_ssrc = gst_rtp_rtx_send_choose_ssrc (rtx, rtx_ssrc, consider);
-    data = ssrc_rtx_data_new (rtx_ssrc);
-    g_hash_table_insert (rtx->ssrc_data, GUINT_TO_POINTER (ssrc), data);
-    g_hash_table_insert (rtx->rtx_ssrcs, GUINT_TO_POINTER (rtx_ssrc),
-        GUINT_TO_POINTER (ssrc));
-  } else {
-    data = g_hash_table_lookup (rtx->ssrc_data, GUINT_TO_POINTER (ssrc));
+  if (rtx->external_ssrc_map) {
+    gchar *ssrc_str;
+    ssrc_str = g_strdup_printf ("%" G_GUINT32_FORMAT, ssrc);
+    consider = gst_structure_get_uint (rtx->external_ssrc_map, ssrc_str,
+        &consider_ssrc);
+    g_free (ssrc_str);
   }
+  rtx_ssrc = gst_rtp_rtx_send_choose_ssrc (rtx, consider_ssrc, consider);
+  data = ssrc_rtx_data_new (rtx_ssrc, rtx_payload_type, current_caps);
+
+  if (G_UNLIKELY (consider && rtx_ssrc != consider_ssrc))
+    GST_WARNING_OBJECT (rtx,
+        "ssrc from RTX SSRC map collided with existing ssrc, "
+        "using %u instead of %u for RTX ssrc", rtx_ssrc, consider_ssrc);
+
+  GST_DEBUG_OBJECT (rtx,
+      "New master stream (payload: %d->%d, ssrc: %u->%u, "
+      "caps: %" GST_PTR_FORMAT " -> %" GST_PTR_FORMAT ")",
+      payload_type, rtx_payload_type, ssrc, rtx_ssrc,
+      current_caps, data->rtx_caps);
+  gst_caps_unref (current_caps);
+
+  g_hash_table_insert (rtx->ssrc_data, GUINT_TO_POINTER (ssrc), data);
+  g_hash_table_insert (rtx->rtx_ssrcs, GUINT_TO_POINTER (rtx_ssrc),
+      GUINT_TO_POINTER (ssrc));
+
   return data;
 }
 
@@ -392,7 +434,7 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer)
 
   /* get needed data from GstRtpRtxSend */
   ssrc = gst_rtp_buffer_get_ssrc (&rtp);
-  data = gst_rtp_rtx_send_get_ssrc_data (rtx, ssrc);
+  data = g_hash_table_lookup (rtx->ssrc_data, GUINT_TO_POINTER (ssrc));
   ssrc = data->rtx_ssrc;
   seqnum = data->next_seqnum++;
   fmtp = GPOINTER_TO_UINT (g_hash_table_lookup (rtx->rtx_pt_map,
@@ -473,6 +515,7 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
         guint seqnum = 0;
         guint ssrc = 0;
         GstBuffer *rtx_buf = NULL;
+        GstCaps *rtx_buf_caps = NULL;
 
         /* retrieve seqnum of the packet that need to be retransmitted */
         if (!gst_structure_get_uint (s, "seqnum", &seqnum))
@@ -495,7 +538,7 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
           /* update statistics */
           ++rtx->num_rtx_requests;
 
-          data = gst_rtp_rtx_send_get_ssrc_data (rtx, ssrc);
+          data = g_hash_table_lookup (rtx->ssrc_data, GUINT_TO_POINTER (ssrc));
 
           search_item.seqnum = seqnum;
           iter = g_sequence_lookup (data->queue, &search_item,
@@ -504,6 +547,7 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
             BufferQueueItem *item = g_sequence_get (iter);
             GST_LOG_OBJECT (rtx, "found %u", item->seqnum);
             rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer);
+            rtx_buf_caps = gst_caps_ref (data->rtx_caps);
           }
 #ifndef GST_DISABLE_DEBUG
           else {
@@ -529,7 +573,7 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
         GST_OBJECT_UNLOCK (rtx);
 
         if (rtx_buf)
-          gst_rtp_rtx_send_push_out (rtx, rtx_buf);
+          gst_rtp_rtx_send_push_out (rtx, rtx_buf, rtx_buf_caps);
 
         gst_event_unref (event);
         res = TRUE;
@@ -552,10 +596,14 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 
           master_ssrc = GPOINTER_TO_UINT (g_hash_table_lookup (rtx->rtx_ssrcs,
                   GUINT_TO_POINTER (ssrc)));
-          data = gst_rtp_rtx_send_get_ssrc_data (rtx, master_ssrc);
+          data = g_hash_table_lookup (rtx->ssrc_data,
+              GUINT_TO_POINTER (master_ssrc));
 
           /* change rtx_ssrc and update the reverse map */
           data->rtx_ssrc = gst_rtp_rtx_send_choose_ssrc (rtx, 0, FALSE);
+          data->rtx_caps = gst_caps_make_writable (data->rtx_caps);
+          gst_caps_set_simple (data->rtx_caps,
+              "ssrc", G_TYPE_UINT, data->rtx_ssrc, NULL);
           g_hash_table_remove (rtx->rtx_ssrcs, GUINT_TO_POINTER (ssrc));
           g_hash_table_insert (rtx->rtx_ssrcs,
               GUINT_TO_POINTER (data->rtx_ssrc),
@@ -573,7 +621,8 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
            * is not going to be used any longer */
           if (g_hash_table_contains (rtx->ssrc_data, GUINT_TO_POINTER (ssrc))) {
             SSRCRtxData *data;
-            data = gst_rtp_rtx_send_get_ssrc_data (rtx, ssrc);
+            data =
+                g_hash_table_lookup (rtx->ssrc_data, GUINT_TO_POINTER (ssrc));
             g_hash_table_remove (rtx->rtx_ssrcs,
                 GUINT_TO_POINTER (data->rtx_ssrc));
             g_hash_table_remove (rtx->ssrc_data, GUINT_TO_POINTER (ssrc));
@@ -614,70 +663,27 @@ gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       gst_pad_start_task (rtx->srcpad,
           (GstTaskFunction) gst_rtp_rtx_send_src_loop, rtx, NULL);
       return TRUE;
-    case GST_EVENT_EOS:
-      GST_INFO_OBJECT (rtx, "Got EOS - enqueueing it");
-      gst_rtp_rtx_send_push_out (rtx, event);
-      return TRUE;
-    case GST_EVENT_CAPS:
-    {
-      GstCaps *caps;
-      GstStructure *s;
-      guint ssrc;
-      gint payload;
-      gpointer rtx_payload;
-      SSRCRtxData *data;
-
-      gst_event_parse_caps (event, &caps);
-
-      s = gst_caps_get_structure (caps, 0);
-      if (!gst_structure_get_uint (s, "ssrc", &ssrc))
-        ssrc = -1;
-      if (!gst_structure_get_int (s, "payload", &payload))
-        payload = -1;
-
-      if (payload == -1 || ssrc == G_MAXUINT)
-        break;
-
-      if (payload == -1)
-        GST_WARNING_OBJECT (rtx, "No payload in caps");
-
-      GST_OBJECT_LOCK (rtx);
-      data = gst_rtp_rtx_send_get_ssrc_data (rtx, ssrc);
-      if (!g_hash_table_lookup_extended (rtx->rtx_pt_map,
-              GUINT_TO_POINTER (payload), NULL, &rtx_payload))
-        rtx_payload = GINT_TO_POINTER (-1);
-
-      if (rtx->rtx_pt_map_structure && GPOINTER_TO_INT (rtx_payload) == -1
-          && payload != -1)
-        GST_WARNING_OBJECT (rtx, "Payload %d not in rtx-pt-map", payload);
-
-      GST_DEBUG_OBJECT (rtx,
-          "got caps for payload: %d->%d, ssrc: %u->%u : %" GST_PTR_FORMAT,
-          payload, GPOINTER_TO_INT (rtx_payload), ssrc, data->rtx_ssrc, caps);
-
-      gst_structure_get_int (s, "clock-rate", &data->clock_rate);
-
-      /* The session might need to know the RTX ssrc */
-      caps = gst_caps_copy (caps);
-      gst_caps_set_simple (caps, "rtx-ssrc", G_TYPE_UINT, data->rtx_ssrc,
-          "rtx-seqnum-offset", G_TYPE_UINT, data->seqnum_base, NULL);
-
-      if (GPOINTER_TO_INT (rtx_payload) != -1)
-        gst_caps_set_simple (caps, "rtx-payload", G_TYPE_INT,
-            GPOINTER_TO_INT (rtx_payload), NULL);
-
-      GST_DEBUG_OBJECT (rtx, "got clock-rate from caps: %d for ssrc: %u",
-          data->clock_rate, ssrc);
-      GST_OBJECT_UNLOCK (rtx);
-
-      gst_event_unref (event);
-      event = gst_event_new_caps (caps);
-      gst_caps_unref (caps);
-      break;
-    }
     default:
       break;
   }
+
+  GST_OBJECT_LOCK (rtx);
+  if (!IS_RTX_ENABLED (rtx)) {
+    if (GST_EVENT_CAPS == GST_EVENT_TYPE (event)) {
+      GstCaps *event_caps;
+      gst_event_parse_caps (event, &event_caps);
+      gst_caps_replace (&rtx->master_stream_caps, event_caps);
+    }
+  } else if (GST_EVENT_IS_SERIALIZED (event)) {
+    GST_OBJECT_UNLOCK (rtx);
+
+    GST_INFO_OBJECT (rtx, "Got %s event - enqueueing it",
+        GST_EVENT_TYPE_NAME (event));
+    gst_rtp_rtx_send_push_out (rtx, event, NULL);
+    return TRUE;
+  }
+
+  GST_OBJECT_UNLOCK (rtx);
   return gst_pad_event_default (pad, parent, event);
 }
 
@@ -735,7 +741,12 @@ process_buffer (GstRtpRtxSend * rtx, GstBuffer * buffer)
 
   /* do not store the buffer if it's payload type is unknown */
   if (g_hash_table_contains (rtx->rtx_pt_map, GUINT_TO_POINTER (payload_type))) {
-    data = gst_rtp_rtx_send_get_ssrc_data (rtx, ssrc);
+    if (G_LIKELY (g_hash_table_contains (rtx->ssrc_data,
+                GUINT_TO_POINTER (ssrc)))) {
+      data = g_hash_table_lookup (rtx->ssrc_data, GUINT_TO_POINTER (ssrc));
+    } else {
+      data = gst_rtp_rtx_send_new_ssrc_data (rtx, ssrc, payload_type);
+    }
 
     if (data->clock_rate == 0 && rtx->clock_rate_map_structure) {
       data->clock_rate =
@@ -766,15 +777,18 @@ static GstFlowReturn
 gst_rtp_rtx_send_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
   GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (parent);
-  GstFlowReturn ret;
 
   GST_OBJECT_LOCK (rtx);
-  if (rtx->rtx_pt_map_structure)
+  if (IS_RTX_ENABLED (rtx)) {
     process_buffer (rtx, buffer);
-  GST_OBJECT_UNLOCK (rtx);
-  ret = gst_pad_push (rtx->srcpad, buffer);
+    GST_OBJECT_UNLOCK (rtx);
 
-  return ret;
+    gst_rtp_rtx_send_push_out (rtx, buffer, NULL);
+    return GST_FLOW_OK;
+  }
+
+  GST_OBJECT_UNLOCK (rtx);
+  return gst_pad_push (rtx->srcpad, buffer);
 }
 
 static gboolean
@@ -792,7 +806,13 @@ gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
   GstFlowReturn ret;
 
   GST_OBJECT_LOCK (rtx);
-  gst_buffer_list_foreach (list, process_buffer_from_list, rtx);
+  if (IS_RTX_ENABLED (rtx)) {
+    gst_buffer_list_foreach (list, process_buffer_from_list, rtx);
+
+    GST_OBJECT_UNLOCK (rtx);
+    gst_rtp_rtx_send_push_out (rtx, list, NULL);
+    return GST_FLOW_OK;
+  }
   GST_OBJECT_UNLOCK (rtx);
 
   ret = gst_pad_push_list (rtx->srcpad, list);
@@ -803,32 +823,66 @@ gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
 static void
 gst_rtp_rtx_send_src_loop (GstRtpRtxSend * rtx)
 {
-  GstDataQueueItem *data;
+  RtxDataQueueItem *data;
+  GstDataQueueItem *gstdata;
 
-  if (gst_data_queue_pop (rtx->queue, &data)) {
-    GST_LOG_OBJECT (rtx, "pushing rtx buffer %p", data->object);
+  if (gst_data_queue_pop (rtx->queue, &gstdata)) {
+    data = (RtxDataQueueItem *) gstdata;
+    if (G_LIKELY (GST_IS_BUFFER (gstdata->object))) {
+      GstEvent *caps_event = NULL;
+      gboolean is_rtx_buf = data->rtx_caps != NULL;
 
-    if (G_LIKELY (GST_IS_BUFFER (data->object))) {
       GST_OBJECT_LOCK (rtx);
-      /* Update statistics just before pushing. */
-      rtx->num_rtx_packets++;
+      if (is_rtx_buf) {
+        rtx->num_rtx_packets++;
+        if (!rtx->is_rtx_stream ||
+            !gst_caps_is_equal (rtx->rtx_stream_caps, data->rtx_caps))
+          caps_event = gst_event_new_caps (data->rtx_caps);
+      } else if (rtx->is_rtx_stream)
+        caps_event = gst_event_new_caps (rtx->master_stream_caps);
+
+      rtx->is_rtx_stream = is_rtx_buf;
+      if (rtx->is_rtx_stream)
+        gst_caps_replace (&rtx->rtx_stream_caps, data->rtx_caps);
+      else
+        gst_caps_replace (&rtx->rtx_stream_caps, NULL);
       GST_OBJECT_UNLOCK (rtx);
 
-      gst_pad_push (rtx->srcpad, GST_BUFFER (data->object));
-    } else if (GST_IS_EVENT (data->object)) {
-      gst_pad_push_event (rtx->srcpad, GST_EVENT (data->object));
+      if (caps_event)
+        gst_pad_push_event (rtx->srcpad, caps_event);
+      gst_pad_push (rtx->srcpad, GST_BUFFER (gstdata->object));
+    } else if (GST_IS_BUFFER_LIST (gstdata->object)) {
+      /* Buffer lists can only come from the chain function, so we know we are
+         dealing with master stream */
+      GstEvent *caps_event = NULL;
 
+      GST_OBJECT_LOCK (rtx);
+      if (rtx->is_rtx_stream)
+        caps_event = gst_event_new_caps (rtx->master_stream_caps);
+      rtx->is_rtx_stream = FALSE;
+      gst_caps_replace (&rtx->rtx_stream_caps, NULL);
+      GST_OBJECT_UNLOCK (rtx);
+
+      if (caps_event)
+        gst_pad_push_event (rtx->srcpad, caps_event);
+      gst_pad_push_list (rtx->srcpad, GST_BUFFER_LIST (gstdata->object));
+    } else if (GST_IS_EVENT (gstdata->object)) {
       /* after EOS, we should not send any more buffers,
        * even if there are more requests coming in */
-      if (GST_EVENT_TYPE (data->object) == GST_EVENT_EOS) {
+      if (GST_EVENT_TYPE (gstdata->object) == GST_EVENT_EOS) {
         gst_rtp_rtx_send_set_flushing (rtx, TRUE);
+      } else if (GST_EVENT_TYPE (gstdata->object) == GST_EVENT_CAPS) {
+        GstCaps *new_master_caps;
+        gst_event_parse_caps (GST_EVENT (gstdata->object), &new_master_caps);
+        gst_caps_replace (&rtx->master_stream_caps, new_master_caps);
       }
+      gst_pad_push_event (rtx->srcpad, GST_EVENT (gstdata->object));
     } else {
       g_assert_not_reached ();
     }
 
-    data->object = NULL;        /* we no longer own that object */
-    data->destroy (data);
+    gstdata->object = NULL;     /* we no longer own that object */
+    gstdata->destroy (data);
   } else {
     GST_LOG_OBJECT (rtx, "flushing");
     gst_pad_pause_task (rtx->srcpad);
