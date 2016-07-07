@@ -572,6 +572,207 @@ GST_START_TEST (test_rtxsender_max_size_time)
 
 GST_END_TEST;
 
+/*
+  We use this probe to check that the RTP buffers going out of the element
+  correspond to the caps of the pad. It was originally written for
+  test_rtxsender_caps_stress, but for sake of convenience we use it on all caps
+  related tests.
+*/
+static GstPadProbeReturn
+probe_check_caps_vs_rtp_data (GstPad * pad, GstPadProbeInfo * info,
+    gpointer user_data)
+{
+  guint caps_ssrc = 0;
+  gint caps_pt = 0;
+  GstRTPBuffer rtpbuf = GST_RTP_BUFFER_INIT;
+  GstCaps *caps = gst_pad_get_current_caps (pad);
+  GstStructure *s = gst_caps_get_structure (caps, 0);
+
+  (void) user_data;
+  gst_structure_get_uint (s, "ssrc", &caps_ssrc);
+  gst_structure_get_int (s, "payload", &caps_pt);
+
+  gst_rtp_buffer_map (GST_PAD_PROBE_INFO_BUFFER (info), GST_MAP_READ, &rtpbuf);
+
+  fail_unless_equals_int (caps_ssrc, gst_rtp_buffer_get_ssrc (&rtpbuf));
+  fail_unless_equals_int (caps_pt, gst_rtp_buffer_get_payload_type (&rtpbuf));
+  gst_rtp_buffer_unmap (&rtpbuf);
+  gst_caps_unref (caps);
+  return GST_PAD_PROBE_OK;
+}
+
+GST_START_TEST (test_rtxsender_caps)
+{
+  guint master_ssrc = 1234567;
+  guint master_pt = 96;
+  guint rtx_ssrc = 7777777;
+  guint rtx_pt = 99;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gulong probe_id = gst_pad_add_probe (h->sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
+      probe_check_caps_vs_rtp_data, NULL, NULL);
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map, "ssrc-map", ssrc_map, NULL);
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "media = (string)video, payload = (int)96, "
+      "ssrc = (uint)1234567, clock-rate = (int)90000, "
+      "encoding-name = (string)RAW");
+
+  push_pull_and_verify (h,
+      create_rtp_buffer (master_ssrc, master_pt, 100),
+      FALSE, master_ssrc, master_pt, 100);
+  /* We should get 'stream-start', 'caps' and 'segment' events by this point */
+  fail_unless_equals_int (gst_harness_events_in_queue (h), 3);
+
+  /* Asking to retransmit the buffer twice. RTX caps event should be pushed
+     only once */
+  for (gint i = 0; i < 2; ++i) {
+    gst_harness_push_upstream_event (h,
+        create_rtx_event (master_ssrc, master_pt, 100));
+    pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 100);
+    fail_unless_equals_int (gst_harness_events_in_queue (h), 4);
+  }
+
+  /* Pushing 3 buffers, master stream caps event should be pushed
+     only once */
+  for (gint i = 0; i < 3; ++i) {
+    push_pull_and_verify (h,
+        create_rtp_buffer (master_ssrc, master_pt, 100 + i),
+        FALSE, master_ssrc, master_pt, 100 + i);
+    fail_unless_equals_int (gst_harness_events_in_queue (h), 5);
+  }
+
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_pad_remove_probe (h->sinkpad, probe_id);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxsender_caps_multi_ssrc)
+{
+  guint master_ssrc0 = 1234567;
+  guint master_ssrc1 = 7654321;
+  guint master_pt = 96;
+  guint rtx_ssrc0 = 7777777;
+  guint rtx_ssrc1 = 8888888;
+  guint rtx_pt = 99;
+  GstCaps *caps;
+  GstStructure *pt_map, *ssrc_map;
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gulong probe_id = gst_pad_add_probe (h->sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
+      probe_check_caps_vs_rtp_data, NULL, NULL);
+
+  pt_map = gst_structure_new ("application/x-rtp-pt-map",
+      "96", G_TYPE_UINT, rtx_pt, NULL);
+  ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
+      "1234567", G_TYPE_UINT, rtx_ssrc0,
+      "7654321", G_TYPE_UINT, rtx_ssrc1, NULL);
+  g_object_set (h->element,
+      "payload-type-map", pt_map, "ssrc-map", ssrc_map, NULL);
+
+  /* Pushing 2 buffers from different ssrcs */
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "media = (string)video, payload = (int)96, "
+      "ssrc = (uint)1234567, clock-rate = (int)90000, "
+      "encoding-name = (string)RAW");
+  push_pull_and_verify (h,
+      create_rtp_buffer (master_ssrc0, master_pt, 100),
+      FALSE, master_ssrc0, master_pt, 100);
+  /* We should get 'stream-start', 'caps' and 'segment' events by this point */
+  fail_unless_equals_int (gst_harness_events_in_queue (h), 3);
+
+  caps = gst_caps_from_string ("application/x-rtp, "
+      "media = (string)video, payload = (int)96, "
+      "ssrc = (uint)7654321, clock-rate = (int)90000, "
+      "encoding-name = (string)RAW");
+  gst_harness_push_event (h, gst_event_new_caps (caps));
+  push_pull_and_verify (h,
+      create_rtp_buffer (master_ssrc1, master_pt, 200),
+      FALSE, master_ssrc1, master_pt, 200);
+  /* We should get new caps event */
+  fail_unless_equals_int (gst_harness_events_in_queue (h), 4);
+
+  /* Asking to retransmit the same buffer twice. RTX caps event should be pushed
+     only once */
+  for (gint i = 0; i < 2; ++i) {
+    gst_harness_push_upstream_event (h,
+        create_rtx_event (master_ssrc0, master_pt, 100));
+    pull_and_verify (h, TRUE, rtx_ssrc0, rtx_pt, 100);
+    fail_unless_equals_int (gst_harness_events_in_queue (h), 5);
+  }
+
+  /* Doing the same for another ssrc */
+  for (gint i = 0; i < 2; ++i) {
+    gst_harness_push_upstream_event (h,
+        create_rtx_event (master_ssrc1, master_pt, 200));
+    pull_and_verify (h, TRUE, rtx_ssrc1, rtx_pt, 200);
+    fail_unless_equals_int (gst_harness_events_in_queue (h), 6);
+  }
+
+  gst_caps_unref (caps);
+  gst_structure_free (pt_map);
+  gst_structure_free (ssrc_map);
+  gst_pad_remove_probe (h->sinkpad, probe_id);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
+static GstBuffer *
+caps_stress_push_buffer_cb (GstHarness * h, gpointer data)
+{
+  gint *seqnum = data;
+  g_atomic_int_inc (seqnum);
+  return create_rtp_buffer (1234567, 96, *seqnum);
+}
+
+GST_START_TEST (test_rtxsender_caps_stress)
+{
+  GstCaps *caps;
+  gint seqnum = 0;
+  GstSegment segment;
+  GstHarnessThread *push;
+
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  gulong probe_id = gst_pad_add_probe (h->sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
+      probe_check_caps_vs_rtp_data, NULL, NULL);
+  GstStructure *pt_map =
+      gst_structure_new ("application/x-rtp-pt-map", "96", G_TYPE_UINT, 99,
+      NULL);
+  g_object_set (h->element, "payload-type-map", pt_map, NULL);
+  gst_structure_free (pt_map);
+
+  caps = gst_caps_from_string ("application/x-rtp, "
+      "media = (string)video, payload = (int)96, "
+      "ssrc = (uint)1234567, clock-rate = (int)90000, "
+      "encoding-name = (string)RAW");
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  push = gst_harness_stress_push_buffer_with_cb_start (h,
+      caps, &segment, caps_stress_push_buffer_cb, &seqnum, NULL);
+  gst_caps_unref (caps);
+
+  while (g_atomic_int_get (&seqnum) < 256) {
+    guint prev_seqnum = g_atomic_int_get (&seqnum) - 1;
+    gst_harness_push_upstream_event (h,
+        create_rtx_event (1234567, 96, prev_seqnum));
+  }
+
+  gst_harness_stress_thread_stop (push);
+  gst_pad_remove_probe (h->sinkpad, probe_id);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtprtx_suite (void)
 {
@@ -587,6 +788,9 @@ rtprtx_suite (void)
   tcase_add_test (tc_chain, test_multi_rtxsend_rtxreceive_with_packet_loss);
   tcase_add_test (tc_chain, test_rtxsender_max_size_packets);
   tcase_add_test (tc_chain, test_rtxsender_max_size_time);
+  tcase_add_test (tc_chain, test_rtxsender_caps);
+  tcase_add_test (tc_chain, test_rtxsender_caps_multi_ssrc);
+  tcase_add_test (tc_chain, test_rtxsender_caps_stress);
 
   return s;
 }
