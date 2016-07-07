@@ -62,6 +62,11 @@ struct _GstRtpRtxSend
   /* orig pt (string) -> rtx pt (uint) */
   GstStructure *rtx_pt_map_structure;
 
+  /* The state for handling caps change for RTX & master streams */
+  gboolean is_rtx_stream;
+  GstCaps * rtx_stream_caps;
+  GstCaps * master_stream_caps;
+
   /* buffering control properties */
   guint max_size_time;
   guint max_size_packets;
