@@ -445,7 +445,7 @@ rtp_source_create_stats (RTPSource * src)
           (guint) src->last_rr.lsr,
           "sent-rb-dlsr", G_TYPE_UINT, (guint) src->last_rr.dlsr, NULL);
     }
-
+  } else {
     /* get the last RB */
     have_rb = rtp_source_get_last_rb (src, &fractionlost, &packetslost,
         &exthighestseq, &jitter, &lsr, &dlsr, &round_trip, &rb_ssrc);
