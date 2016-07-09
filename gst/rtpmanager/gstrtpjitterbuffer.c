@@ -149,6 +149,8 @@ enum
 #define DEFAULT_AUTO_RTX_DELAY (20 * GST_MSECOND)
 #define DEFAULT_AUTO_RTX_TIMEOUT (40 * GST_MSECOND)
 
+#define DO_ZOMBIE 1
+
 enum
 {
   PROP_0,
@@ -301,6 +303,8 @@ struct _GstRtpJitterBufferPrivate
   guint32 next_in_seqnum;
 
   GList *timers;
+  gint num_timers;
+  GHashTable *timers_as_seqnum;
 
   /* start and stop ranges */
   GstClockTime npt_start;
@@ -964,6 +968,8 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->last_rtptime = -1;
   priv->avg_jitter = 0;
   priv->timers = NULL;
+  priv->num_timers = 0;
+  priv->timers_as_seqnum = g_hash_table_new (NULL, NULL);
   priv->jbuf = rtp_jitter_buffer_new ();
   g_mutex_init (&priv->jbuf_lock);
   g_cond_init (&priv->jbuf_timer);
@@ -1065,7 +1071,9 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   jitterbuffer = GST_RTP_JITTER_BUFFER (object);
   priv = jitterbuffer->priv;
 
+  g_hash_table_destroy (priv->timers_as_seqnum);
   g_list_free_full (priv->timers, (GDestroyNotify) timer_free);
+
   g_mutex_clear (&priv->jbuf_lock);
   g_cond_clear (&priv->jbuf_timer);
   g_cond_clear (&priv->jbuf_event);
@@ -1957,17 +1965,7 @@ static TimerData *
 find_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
-  TimerData *timer = NULL;
-  GList *walk;
-
-  for (walk = priv->timers; walk; walk = walk->next) {
-    TimerData *test = walk->data;
-    if (test->seqnum == seqnum) {
-      timer = test;
-      break;
-    }
-  }
-  return timer;
+  return g_hash_table_lookup (priv->timers_as_seqnum, GINT_TO_POINTER (seqnum));
 }
 
 static void
@@ -2030,7 +2028,11 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
 
   timer = timer_new (type, seqnum, num, timeout, delay, duration);
   priv->timers = g_list_prepend (priv->timers, timer);
+  priv->num_timers++;
   timer->list_entry = priv->timers;
+
+  g_hash_table_insert (priv->timers_as_seqnum, GINT_TO_POINTER (seqnum), timer);
+
   recalculate_timer (jitterbuffer, timer);
   JBUF_SIGNAL_TIMER (priv);
 
@@ -2064,8 +2066,11 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     timer->rtx_delay = delay;
     timer->rtx_retry = 0;
   }
-  if (seqchange)
+  if (seqchange) {
     timer->num_rtx_retry = 0;
+    g_hash_table_remove (priv->timers_as_seqnum, GINT_TO_POINTER (oldseq));
+    g_hash_table_insert (priv->timers_as_seqnum, GINT_TO_POINTER (seqnum), timer);
+  }
 
   if (priv->clock_id) {
     /* we changed the seqnum and there is a timer currently waiting with this
@@ -2105,6 +2110,8 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
 
   GST_DEBUG_OBJECT (jitterbuffer, "remove timer for #%d", timer->seqnum);
   priv->timers = g_list_delete_link (priv->timers, timer->list_entry);
+  priv->num_timers--;
+  g_hash_table_remove (priv->timers_as_seqnum, GINT_TO_POINTER (timer->seqnum));
   timer_free (timer);
 }
 
@@ -2114,7 +2121,9 @@ remove_all_timers (GstRtpJitterBuffer * jitterbuffer)
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GST_DEBUG_OBJECT (jitterbuffer, "removed all timers");
   g_list_free_full (priv->timers, (GDestroyNotify) timer_free);
+  g_hash_table_remove_all (priv->timers_as_seqnum);
   priv->timers = NULL;
+  priv->num_timers = 0;
 }
 
 /* get the extra delay to wait before sending RTX */
@@ -2221,6 +2230,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
          * spacing. */
         do_next_seqnum = FALSE;
       } else {
+#if DO_ZOMBIE
         /* Schedule a ZOMBIE timer in order to record stats when/if the
          * retransmitted packet arrives */
         GST_DEBUG_OBJECT (jitterbuffer, "Reschedule as ZOMBIE timer");
@@ -2229,6 +2239,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
             dts + priv->rtx_stats_timeout * GST_MSECOND, 0, FALSE);
         /* Set timer to NULL to avoid rescheduling again */
         timer = NULL;
+#endif
       }
     }
   }
@@ -2725,8 +2736,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
         }
       } else {
         /* new packet, we are missing some packets */
-        guint len = g_list_length (priv->timers);
-        if (G_UNLIKELY (len >= max_dropout)) {
+        if (G_UNLIKELY (priv->num_timers >= max_dropout)) {
           /* If we have timers for more than RTP_MAX_DROPOUT packets
            * pending this means that we have a huge gap overall. We can
            * reset the jitterbuffer at this point because there's
@@ -2734,7 +2744,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
            * sensible with the past data. Just try again from the
            * next packet */
           GST_WARNING_OBJECT (jitterbuffer,
-              "%d pending timers > %d - resetting", len,
+              "%d pending timers > %d - resetting", priv->num_timers,
               max_dropout);
           reset = TRUE;
           gst_buffer_unref (buffer);
@@ -2858,6 +2868,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
 
     /* priv->last_popped_seqnum >= seqnum, we're too late. */
     if (G_UNLIKELY (gap <= 0)) {
+#if DO_ZOMBIE
       if (priv->do_retransmission) {
         TimerData *timer;
 
@@ -2869,6 +2880,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
           remove_timer (jitterbuffer, timer);
         }
       }
+#endif
       goto too_late;
     }
   }
@@ -3548,6 +3560,7 @@ do_lost_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
   item = alloc_item (event, ITEM_TYPE_LOST, -1, -1, seqnum, lost_packets, -1);
   rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL, -1);
 
+#if DO_ZOMBIE
   if (GST_CLOCK_TIME_IS_VALID (timer->rtx_last)) {
     /* zombie timer to update stats if the packet arrives too late */
     GST_DEBUG_OBJECT (jitterbuffer, "Reschedule as ZOMBIE timer");
@@ -3558,7 +3571,9 @@ do_lost_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     /* remove timer now */
     remove_timer (jitterbuffer, timer);
   }
-
+#else
+    remove_timer (jitterbuffer, timer);
+#endif
   if (head)
     JBUF_SIGNAL_EVENT (priv);
 
