@@ -1887,6 +1887,40 @@ GST_START_TEST (test_latency_changed_event)
 
 GST_END_TEST;
 
+GST_START_TEST (test_performance)
+{
+  GstHarness *h = gst_harness_new_parse (
+      "rtpjitterbuffer do-lost=1 do-retransmission=1 latency=1000");
+  GTimer *timer = g_timer_new ();
+  const gdouble test_duration = 2.0;
+  guint buffers_pushed = 0;
+  guint buffers_received;
+
+  gst_harness_set_src_caps (h, generate_caps ());
+  gst_harness_use_systemclock (h);
+
+  while (g_timer_elapsed (timer, NULL) < test_duration) {
+    /* Simulate 1ms packets */
+    guint n = buffers_pushed * 2; // every packet also produces a gap
+    guint16 seqnum = n & 0xffff;
+    guint32 rtp_ts = n * 8;
+    GstClockTime dts = n * GST_MSECOND;
+    gst_harness_push (h, generate_test_buffer_full (dts, TRUE, seqnum, rtp_ts));
+    buffers_pushed++;
+    g_usleep (G_USEC_PER_SEC / 10000);
+  }
+  g_timer_destroy (timer);
+
+  buffers_received = gst_harness_buffers_received (h);
+  GST_INFO ("Pushed %d, received %d (%.1f%%)", buffers_pushed, buffers_received,
+      100.0 * buffers_received / buffers_pushed);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 rtpjitterbuffer_suite (void)
 {
@@ -1924,6 +1958,8 @@ rtpjitterbuffer_suite (void)
       G_N_ELEMENTS (test_considered_lost_packet_in_large_gap_arrives_input));
 
   tcase_add_test (tc_chain, test_latency_changed_event);
+
+  tcase_add_test (tc_chain, test_performance);
 
   return s;
 }
