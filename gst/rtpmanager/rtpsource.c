@@ -391,14 +391,15 @@ rtp_source_create_stats (RTPSource * src)
   /* is_sender applies to internal sources you send with, but also
      the equivalent source on the receiver side */
   if (is_sender) {
-    gst_structure_set (s, "clock-rate", G_TYPE_INT, src->clock_rate, NULL);
+    gst_structure_set (s,
+        "clock-rate", G_TYPE_INT, src->clock_rate,
+        "bitrate", G_TYPE_UINT64, src->bitrate, NULL);
 
     if (internal) {
       gst_structure_set (s,
           "seqnum-base", G_TYPE_INT, src->seqnum_offset,
           "octets-sent", G_TYPE_UINT64, src->stats.octets_sent,
           "packets-sent", G_TYPE_UINT64, src->stats.packets_sent,
-          "bitrate", G_TYPE_UINT64, src->bitrate,
           "recv-pli-count", G_TYPE_UINT, src->stats.recv_pli_count,
           "recv-fir-count", G_TYPE_UINT, src->stats.recv_fir_count, NULL);
     } else {
