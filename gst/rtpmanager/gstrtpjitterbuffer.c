@@ -238,7 +238,10 @@ enum
   }                                                      \
 } G_STMT_END
 
-typedef struct _TimerQueue TimerQueue;
+typedef struct TimerQueue {
+  GQueue *timers;
+  GHashTable *hashtable;
+} TimerQueue;
 
 struct _GstRtpJitterBufferPrivate
 {
@@ -302,7 +305,7 @@ struct _GstRtpJitterBufferPrivate
   guint32 next_in_seqnum;
 
   GArray *timers;
-  TimerQueue *zombie_timers;
+  TimerQueue *rtx_stats_timers;
 
   /* start and stop ranges */
   GstClockTime npt_start;
@@ -356,7 +359,6 @@ struct _GstRtpJitterBufferPrivate
 
 typedef enum
 {
-  TIMER_TYPE_NONE = 0,
   TIMER_TYPE_EXPECTED,
   TIMER_TYPE_LOST,
   TIMER_TYPE_DEADLINE,
@@ -377,15 +379,6 @@ typedef struct
   GstClockTime rtx_last;
   guint num_rtx_retry;
 } TimerData;
-
-#define MAX_NUM_ZOMBIES 200
-struct _TimerQueue {
-  TimerData timers[MAX_NUM_ZOMBIES];
-  guint idx;
-  guint max_size;
-  GHashTable *hashtable;
-};
-
 
 #define GST_RTP_JITTER_BUFFER_GET_PRIVATE(o) \
   (G_TYPE_INSTANCE_GET_PRIVATE ((o), GST_TYPE_RTP_JITTER_BUFFER, \
@@ -489,7 +482,7 @@ static GstStructure *gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer *
 static void update_rtx_stats (GstRtpJitterBuffer * jitterbuffer,
     TimerData * timer, GstClockTime dts, gboolean success);
 
-static TimerQueue * timer_queue_new (guint max_size);
+static TimerQueue * timer_queue_new (void);
 static void timer_queue_free (TimerQueue * queue);
 
 static void
@@ -949,7 +942,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->last_rtptime = -1;
   priv->avg_jitter = 0;
   priv->timers = g_array_new (FALSE, TRUE, sizeof (TimerData));
-  priv->zombie_timers = timer_queue_new (MAX_NUM_ZOMBIES);
+  priv->rtx_stats_timers = timer_queue_new ();
   priv->jbuf = rtp_jitter_buffer_new ();
   g_mutex_init (&priv->jbuf_lock);
   g_cond_init (&priv->jbuf_timer);
@@ -1052,7 +1045,7 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   priv = jitterbuffer->priv;
 
   g_array_free (priv->timers, TRUE);
-  timer_queue_free (priv->zombie_timers);
+  timer_queue_free (priv->rtx_stats_timers);
   g_mutex_clear (&priv->jbuf_lock);
   g_cond_clear (&priv->jbuf_timer);
   g_cond_clear (&priv->jbuf_event);
@@ -1941,14 +1934,12 @@ apply_offset (GstRtpJitterBuffer * jitterbuffer, GstClockTime timestamp)
 }
 
 static TimerQueue *
-timer_queue_new (guint max_size)
+timer_queue_new (void)
 {
   TimerQueue * queue;
 
-  G_STATIC_ASSERT (TIMER_TYPE_NONE == 0);
-  queue = g_slice_new0 (TimerQueue);
-  queue->idx = 0;
-  queue->max_size = max_size;
+  queue = g_slice_new (TimerQueue);
+  queue->timers = g_queue_new ();
   queue->hashtable = g_hash_table_new (NULL, NULL);
 
   return queue;
@@ -1961,23 +1952,38 @@ timer_queue_free (TimerQueue * queue)
     return;
 
   g_hash_table_destroy (queue->hashtable);
+  g_queue_free_full (queue->timers, g_free);
   g_slice_free (TimerQueue, queue);
 }
 
 static void
-timer_queue_add_copy (TimerQueue * queue, const TimerData * timer)
+timer_queue_append (TimerQueue * queue, const TimerData * timer,
+    GstClockTime timeout)
 {
-  TimerData *entry = &queue->timers[queue->idx];
+  TimerData *copy;
 
-  if (entry->type != TIMER_TYPE_NONE)
-    g_hash_table_remove (queue->hashtable, GINT_TO_POINTER (entry->seqnum));
+  copy = g_memdup (timer, sizeof (*timer));
+  copy->timeout = timeout;
 
-  *entry = *timer;
-  g_hash_table_insert (queue->hashtable, GINT_TO_POINTER (entry->seqnum), entry);
+  GST_LOG ("Append rtx-stats timer #%d, %" GST_TIME_FORMAT,
+      copy->seqnum, GST_TIME_ARGS (copy->timeout));
+  g_queue_push_tail (queue->timers, copy);
+  g_hash_table_insert (queue->hashtable, GINT_TO_POINTER (copy->seqnum), copy);
+}
 
-  queue->idx++;
-  if (queue->idx == queue->max_size)
-    queue->idx = 0;
+static void
+timer_queue_clear_until (TimerQueue * queue, GstClockTime timeout)
+{
+  TimerData *test;
+
+  test = g_queue_peek_head (queue->timers);
+  while (test && test->timeout < timeout) {
+    GST_LOG ("Pop rtx-stats timer #%d, %" GST_TIME_FORMAT " < %" GST_TIME_FORMAT,
+        test->seqnum, GST_TIME_ARGS (test->timeout), GST_TIME_ARGS (timeout));
+    g_hash_table_remove (queue->hashtable, GINT_TO_POINTER (test->seqnum));
+    g_free (g_queue_pop_head (queue->timers));
+    test = g_queue_peek_head (queue->timers);
+  }
 }
 
 static TimerData *
@@ -2273,10 +2279,10 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
          * spacing. */
         do_next_seqnum = FALSE;
       } else {
-        /* Schedule a ZOMBIE timer in order to record stats when/if the
-         * retransmitted packet arrives */
-        GST_DEBUG_OBJECT (jitterbuffer, "Add ZOMBIE timer");
-        timer_queue_add_copy (priv->zombie_timers, timer);
+        /* Store timer in order to record stats when/if the retransmitted
+         * packet arrives */
+        timer_queue_append (priv->rtx_stats_timers, timer,
+            dts + priv->rtx_stats_timeout * GST_MSECOND);
       }
     }
   }
@@ -2907,17 +2913,12 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     if (G_UNLIKELY (gap <= 0)) {
       if (priv->do_retransmission) {
         TimerData *timer;
+        gboolean is_rtx = GST_BUFFER_FLAG_IS_SET (buffer,
+            GST_RTP_BUFFER_FLAG_RETRANSMISSION);
 
-        timer = find_timer (jitterbuffer, seqnum);
-        if (timer)
-          remove_timer (jitterbuffer, timer);
-
-        timer = timer_queue_find (priv->zombie_timers, seqnum);
-        if (timer) {
-          if (GST_BUFFER_FLAG_IS_SET (buffer,
-                  GST_RTP_BUFFER_FLAG_RETRANSMISSION))
-            update_rtx_stats (jitterbuffer, timer, dts, FALSE);
-        }
+        if (is_rtx &&
+            (timer = timer_queue_find (priv->rtx_stats_timers, seqnum)))
+          update_rtx_stats (jitterbuffer, timer, dts, FALSE);
       }
       goto too_late;
     }
@@ -3599,11 +3600,9 @@ do_lost_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
   rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL, -1);
 
   if (GST_CLOCK_TIME_IS_VALID (timer->rtx_last)) {
-    /* zombie timer to update stats if the packet arrives too late */
-    GST_DEBUG_OBJECT (jitterbuffer, "Add ZOMBIE timer");
-    /* reschedule_timer (jitterbuffer, timer, timer->seqnum, */
-    /*     now + priv->rtx_stats_timeout * GST_MSECOND, 0, FALSE); */
-    timer_queue_add_copy (priv->zombie_timers, timer);
+    /* Store info to update stats if the packet arrives too late */
+    timer_queue_append (priv->rtx_stats_timers, timer,
+        now + priv->rtx_stats_timeout * GST_MSECOND);
   }
   remove_timer (jitterbuffer, timer);
 
@@ -3667,8 +3666,6 @@ do_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     case TIMER_TYPE_EOS:
       removed = do_eos_timeout (jitterbuffer, timer, now);
       break;
-    default:
-      g_assert_not_reached ();
   }
   return removed;
 }
@@ -3709,6 +3706,11 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
     GST_DEBUG_OBJECT (jitterbuffer, "now %" GST_TIME_FORMAT,
         GST_TIME_ARGS (now));
 
+    /* Clear expired rtx-stats timers */
+    if (priv->do_retransmission)
+      timer_queue_clear_until (priv->rtx_stats_timers, now);
+
+    /* Iterate "normal" timers */
     len = priv->timers->len;
     for (i = 0; i < len;) {
       TimerData *test = &g_array_index (priv->timers, TimerData, i);
