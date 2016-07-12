@@ -459,8 +459,7 @@ rtp_source_create_stats (RTPSource * src)
           "rb-jitter", G_TYPE_UINT, (guint) jitter,
           "rb-lsr", G_TYPE_UINT, (guint) lsr,
           "rb-dlsr", G_TYPE_UINT, (guint) dlsr,
-          "rb-round-trip", G_TYPE_UINT, (guint) round_trip,
-          "rb-ssrc", G_TYPE_UINT, (guint) rb_ssrc, NULL);
+          "rb-round-trip", G_TYPE_UINT, (guint) round_trip, NULL);
     }
   }
 
