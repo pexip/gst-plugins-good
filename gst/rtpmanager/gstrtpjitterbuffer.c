@@ -2119,12 +2119,16 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
   oldseq = timer->seqnum;
 
   GST_DEBUG_OBJECT (jitterbuffer,
-      "replace timer for seqnum %d->%d to %" GST_TIME_FORMAT,
-      oldseq, seqnum, GST_TIME_ARGS (timeout + delay));
+      "replace timer %d for seqnum %d->%d timeout %" GST_TIME_FORMAT
+      "->%" GST_TIME_FORMAT, timer->type, oldseq, seqnum,
+      GST_TIME_ARGS (timer->timeout), GST_TIME_ARGS (timeout + delay));
 
   timer->timeout = timeout + delay;
   timer->seqnum = seqnum;
   if (reset) {
+    GST_DEBUG_OBJECT (jitterbuffer, "reset rtx delay %" GST_TIME_FORMAT
+        "->%" GST_TIME_FORMAT, GST_TIME_ARGS (timer->rtx_delay),
+        GST_TIME_ARGS (delay));
     timer->rtx_base = timeout;
     timer->rtx_delay = delay;
     timer->rtx_retry = 0;
@@ -2307,6 +2311,12 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
     delay = get_rtx_delay (priv);
 
     /* and update/install timer for next seqnum */
+    GST_INFO_OBJECT (jitterbuffer, "Add RTX timer #%d, expected %"
+        GST_TIME_FORMAT ", delay %" GST_TIME_FORMAT ", packet-spacing %"
+        GST_TIME_FORMAT ", jitter %" GST_TIME_FORMAT, priv->next_in_seqnum,
+        GST_TIME_ARGS (expected), GST_TIME_ARGS (delay),
+        GST_TIME_ARGS (priv->packet_spacing), GST_TIME_ARGS (priv->avg_jitter));
+
     if (timer) {
       reschedule_timer (jitterbuffer, timer, priv->next_in_seqnum, expected,
           delay, TRUE);
@@ -2366,8 +2376,7 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
     guint16 seqnum, GstClockTime dts, gint gap)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
-  GstClockTime total_duration, duration, expected_dts;
-  TimerType type;
+  GstClockTime total_duration, duration;
 
   GST_DEBUG_OBJECT (jitterbuffer,
       "dts %" GST_TIME_FORMAT ", last %" GST_TIME_FORMAT,
@@ -2427,33 +2436,39 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
     }
   }
 
-  expected_dts = priv->last_in_dts + duration;
+  if (seqnum != expected || 1) {
+    GstClockTime expected_dts;
+    TimerType type;
 
-  if (priv->do_retransmission) {
-    TimerData *timer = find_timer (jitterbuffer, expected);
+    expected_dts = priv->last_in_dts + duration;
 
-    type = TIMER_TYPE_EXPECTED;
-    /* if we had a timer for the first missing packet, update it. */
-    if (timer && timer->type == TIMER_TYPE_EXPECTED) {
-      GstClockTime timeout = timer->timeout;
+    if (priv->do_retransmission) {
+      TimerData *timer = find_timer (jitterbuffer, expected);
 
-      timer->duration = duration;
-      if (timeout > (expected_dts + timer->rtx_retry)) {
-        GstClockTime delay = timeout - expected_dts - timer->rtx_retry;
-        reschedule_timer (jitterbuffer, timer, timer->seqnum, expected_dts,
-            delay, TRUE);
+      type = TIMER_TYPE_EXPECTED;
+      /* if we had a timer for the first missing packet, update it. */
+      if (timer && timer->type == TIMER_TYPE_EXPECTED) {
+        GstClockTime timeout = timer->timeout;
+
+        timer->duration = duration;
+        if (timeout > (expected_dts + timer->rtx_retry)) {
+          GstClockTime delay = timeout - expected_dts - timer->rtx_retry;
+          reschedule_timer (jitterbuffer, timer, timer->seqnum, expected_dts,
+              delay, TRUE);
+        }
+        expected++;
+        expected_dts += duration;
       }
-      expected++;
-      expected_dts += duration;
+    } else {
+      type = TIMER_TYPE_LOST;
     }
-  } else {
-    type = TIMER_TYPE_LOST;
-  }
 
-  while (gst_rtp_buffer_compare_seqnum (expected, seqnum) > 0) {
-    add_timer (jitterbuffer, type, expected, 0, expected_dts, 0, duration);
-    expected_dts += duration;
-    expected++;
+    while (gst_rtp_buffer_compare_seqnum (expected, seqnum) > 0) {
+      GST_DEBUG("loop");
+      add_timer (jitterbuffer, type, expected, 0, expected_dts, 0, duration);
+      expected_dts += duration;
+      expected++;
+    }
   }
 }
 
@@ -2726,7 +2741,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   if (G_UNLIKELY (priv->eos))
     goto have_eos;
 
-  calculate_jitter (jitterbuffer, dts, rtptime);
+  if (!GST_BUFFER_IS_RETRANSMISSION (buffer))
+    calculate_jitter (jitterbuffer, dts, rtptime);
 
   if (priv->seqnum_base != -1) {
     gint gap;
@@ -3540,10 +3556,10 @@ do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
           "retry", G_TYPE_UINT, timer->num_rtx_retry,
           "frequency", G_TYPE_UINT, rtx_retry_timeout_ms,
           "period", G_TYPE_UINT, rtx_retry_period_ms,
-          "deadline", G_TYPE_UINT, priv->latency_ms,
+          "deadline", G_TYPE_UINT, 0, /* priv->latency_ms, */
           "packet-spacing", G_TYPE_UINT64, priv->packet_spacing,
           "avg-rtt", G_TYPE_UINT, avg_rtx_rtt_ms, NULL));
-  GST_DEBUG_OBJECT (jitterbuffer, "Request RTX: %" GST_PTR_FORMAT, event);
+  GST_INFO_OBJECT (jitterbuffer, "Request RTX: %" GST_PTR_FORMAT, event);
 
   priv->num_rtx_requests++;
   timer->num_rtx_retry++;
@@ -3600,10 +3616,10 @@ do_lost_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
 
   /* we had a gap and thus we lost some packets. Create an event for this.  */
   if (lost_packets > 1)
-    GST_DEBUG_OBJECT (jitterbuffer, "Packets #%d -> #%d lost", seqnum,
+    GST_INFO_OBJECT (jitterbuffer, "Packets #%d -> #%d lost", seqnum,
         seqnum + lost_packets - 1);
   else
-    GST_DEBUG_OBJECT (jitterbuffer, "Packet #%d lost", seqnum);
+    GST_INFO_OBJECT (jitterbuffer, "Packet #%d lost", seqnum);
 
   priv->num_lost += lost_packets;
   priv->num_rtx_failed += num_rtx_retry;
@@ -4531,6 +4547,7 @@ gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer * jbuf)
       "num-lost", G_TYPE_UINT64, priv->num_lost,
       "num-late", G_TYPE_UINT64, priv->num_late,
       "num-duplicates", G_TYPE_UINT64, priv->num_duplicates,
+      "avg-jitter", G_TYPE_UINT64, priv->avg_jitter,
       "rtx-count", G_TYPE_UINT64, priv->num_rtx_requests,
       "rtx-success-count", G_TYPE_UINT64, priv->num_rtx_success,
       "rtx-per-packet", G_TYPE_DOUBLE, priv->avg_rtx_num,
