@@ -3518,6 +3518,26 @@ get_rtx_retry_period (GstRtpJitterBufferPrivate * priv,
 }
 
 static void
+update_avg_rtx_rtt (GstRtpJitterBufferPrivate * priv, GstClockTime rtt)
+{
+  gint weight;
+
+  if (priv->avg_rtx_rtt == 0) {
+    priv->avg_rtx_rtt = rtt;
+    return;
+  }
+
+  if (rtt > 2 * priv->avg_rtx_rtt)
+    weight = 48;
+  else if (rtt > priv->avg_rtx_rtt)
+    weight = 8;
+  else
+    weight = 16;
+
+  priv->avg_rtx_rtt = (rtt + (weight - 1) * priv->avg_rtx_rtt) / weight;
+}
+
+static void
 update_rtx_stats (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     GstClockTime dts, gboolean success)
 {
@@ -3548,10 +3568,7 @@ update_rtx_stats (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
   if (timer->num_rtx_retry == timer->num_rtx_received &&
       dts != GST_CLOCK_TIME_NONE && dts > timer->rtx_last) {
     delay = dts - timer->rtx_last;
-    if (priv->avg_rtx_rtt == 0)
-      priv->avg_rtx_rtt = delay;
-    else
-      priv->avg_rtx_rtt = (delay + 7 * priv->avg_rtx_rtt) / 8;
+    update_avg_rtx_rtt (priv, delay);
   } else {
     delay = 0;
   }
