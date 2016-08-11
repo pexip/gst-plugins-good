@@ -352,6 +352,7 @@ struct _GstRtpJitterBufferPrivate
   GstBuffer *last_sr;
 
   /* some accounting */
+  guint64 num_pushed;
   guint64 num_lost;
   guint64 num_late;
   guint64 num_duplicates;
@@ -3332,6 +3333,7 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
           "Pushing buffer %d, dts %" GST_TIME_FORMAT ", pts %" GST_TIME_FORMAT,
           seqnum, GST_TIME_ARGS (GST_BUFFER_DTS (outbuf)),
           GST_TIME_ARGS (GST_BUFFER_PTS (outbuf)));
+      priv->num_pushed++;
       result = gst_pad_push (priv->srcpad, outbuf);
 
       JBUF_LOCK_CHECK (priv, out_flushing);
@@ -4597,6 +4599,7 @@ gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer * jbuf)
 
   JBUF_LOCK (priv);
   s = gst_structure_new ("application/x-rtp-jitterbuffer-stats",
+      "num-pushed", G_TYPE_UINT64, priv->num_pushed,
       "num-lost", G_TYPE_UINT64, priv->num_lost,
       "num-late", G_TYPE_UINT64, priv->num_late,
       "num-duplicates", G_TYPE_UINT64, priv->num_duplicates,
