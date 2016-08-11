@@ -1997,6 +1997,7 @@ timer_queue_append (TimerQueue * queue, const TimerData * timer,
   copy = g_memdup (timer, sizeof (*timer));
   copy->timeout = timeout;
   copy->type = lost ? TIMER_TYPE_LOST : TIMER_TYPE_EXPECTED;
+  copy->idx = -1;
 
   GST_LOG ("Append rtx-stats timer #%d, %" GST_TIME_FORMAT,
       copy->seqnum, GST_TIME_ARGS (copy->timeout));
@@ -2195,6 +2196,9 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   guint idx;
+
+  if (timer->idx == -1)
+    return;
 
   if (priv->clock_id && priv->timer_seqnum == timer->seqnum)
     unschedule_current_timer (jitterbuffer);
