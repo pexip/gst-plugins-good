@@ -79,6 +79,11 @@ struct _GstRtpRtxSend
   /* statistics */
   guint num_rtx_requests;
   guint num_rtx_packets;
+
+  /* bucket */
+  gint max_kbps;
+  gsize bucket_size;
+  GstClockTime prev_time;
 };
 
 struct _GstRtpRtxSendClass
