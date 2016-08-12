@@ -52,6 +52,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_rtx_send_debug);
 #define DEFAULT_RTX_PAYLOAD_TYPE 0
 #define DEFAULT_MAX_SIZE_TIME    0
 #define DEFAULT_MAX_SIZE_PACKETS 100
+#define DEFAULT_MAX_KBPS -1
 
 enum
 {
@@ -61,7 +62,8 @@ enum
   PROP_MAX_SIZE_TIME,
   PROP_MAX_SIZE_PACKETS,
   PROP_NUM_RTX_REQUESTS,
-  PROP_NUM_RTX_PACKETS
+  PROP_NUM_RTX_PACKETS,
+  PROP_MAX_KBPS
 };
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
@@ -209,6 +211,12 @@ gst_rtp_rtx_send_class_init (GstRtpRtxSendClass * klass)
           " Number of retransmission packets sent", 0, G_MAXUINT,
           0, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_MAX_KBPS,
+      g_param_spec_int ("max-kbps", "Maximum Kbps",
+          "The maximum number of kilobits of RTX packets to allow "
+          "(-1 = unlimited)", -1, G_MAXINT, DEFAULT_MAX_KBPS,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+
   gst_element_class_add_static_pad_template (gstelement_class, &src_factory);
   gst_element_class_add_static_pad_template (gstelement_class, &sink_factory);
 
@@ -292,6 +300,7 @@ gst_rtp_rtx_send_init (GstRtpRtxSend * rtx)
 
   rtx->max_size_time = DEFAULT_MAX_SIZE_TIME;
   rtx->max_size_packets = DEFAULT_MAX_SIZE_PACKETS;
+  rtx->prev_time = GST_CLOCK_TIME_NONE;
 }
 
 static void
@@ -485,6 +494,89 @@ buffer_queue_items_cmp (BufferQueueItem * a, BufferQueueItem * b,
   return gst_rtp_buffer_compare_seqnum (b->seqnum, a->seqnum);
 }
 
+static gsize
+get_buffer_size_in_bits (GstBuffer * buf)
+{
+  GstMapInfo map = GST_MAP_INFO_INIT;
+  gsize size;
+  gst_buffer_map (buf, &map, GST_MAP_READ);
+  size = map.size * 8;
+  gst_buffer_unmap (buf, &map);
+  return size;
+}
+
+static guint64
+gst_rtp_rtx_send_get_tokens (GstRtpRtxSend * rtx, GstClock * clock)
+{
+  guint64 tokens = 0;
+  GstClockTimeDiff elapsed_time = 0;
+  GstClockTime current_time = 0;
+  GstClockTimeDiff token_time;
+
+  /* get the current time */
+  current_time = gst_clock_get_time (clock);
+
+  /* get the elapsed time */
+  if (GST_CLOCK_TIME_IS_VALID (rtx->prev_time)) {
+    if (current_time < rtx->prev_time) {
+      GST_WARNING_OBJECT (rtx, "Clock is going backwards!!");
+      return 0;
+    } else {
+      elapsed_time = GST_CLOCK_DIFF (rtx->prev_time, current_time);
+    }
+  } else {
+    rtx->prev_time = current_time;
+  }
+
+  /* calculate number of tokens and how much time is "spent" by these tokens */
+  tokens =
+      gst_util_uint64_scale (elapsed_time, rtx->max_kbps * 1000, GST_SECOND);
+  token_time =
+      gst_util_uint64_scale (GST_SECOND, tokens, rtx->max_kbps * 1000);
+
+  /* increment the time with how much we spent in terms of whole tokens */
+  rtx->prev_time += token_time;
+  return tokens;
+}
+
+static gboolean
+gst_rtp_rtx_send_token_bucket (GstRtpRtxSend * rtx, GstBuffer * buf)
+{
+  GstClock *clock;
+  gsize buffer_size;
+  guint64 tokens;
+
+  /* with an unlimited bucket-size, we have nothing to do */
+  if (rtx->max_kbps == -1)
+    return TRUE;
+
+  /* without a clock, nothing to do */
+  clock = GST_ELEMENT_CAST (rtx)->clock;
+  if (clock == NULL) {
+    GST_WARNING_OBJECT (rtx, "No clock, can't get the time");
+    return TRUE;
+  }
+
+  buffer_size = get_buffer_size_in_bits (buf);
+  tokens = gst_rtp_rtx_send_get_tokens (rtx, clock);
+
+  rtx->bucket_size = MIN (rtx->max_kbps * 1000, rtx->bucket_size + tokens);
+  GST_LOG_OBJECT (rtx, "Adding %lu tokens to bucket (contains %lu tokens)",
+      tokens, rtx->bucket_size);
+
+  if (buffer_size > rtx->bucket_size) {
+    GST_DEBUG_OBJECT (rtx, "Buffer size (%lu) exeedes bucket size (%lu)",
+        buffer_size, rtx->bucket_size);
+    return FALSE;
+  }
+
+  rtx->bucket_size -= buffer_size;
+  GST_LOG_OBJECT (rtx, "Buffer taking %lu tokens (%lu left)",
+      buffer_size, rtx->bucket_size);
+
+  return TRUE;
+}
+
 static gboolean
 gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
@@ -533,8 +625,13 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
           if (iter) {
             BufferQueueItem *item = g_sequence_get (iter);
             GST_DEBUG_OBJECT (rtx, "found %" G_GUINT16_FORMAT, item->seqnum);
-            rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer);
-            rtx_buf_caps = gst_caps_ref (data->rtx_caps);
+            if (gst_rtp_rtx_send_token_bucket (rtx, item->buffer)) {
+              rtx_buf = gst_rtp_rtx_buffer_new (rtx, item->buffer);
+              rtx_buf_caps = gst_caps_ref (data->rtx_caps);
+            } else {
+              GST_DEBUG_OBJECT (rtx, "Packet #%" G_GUINT16_FORMAT
+                  " dropped due to full bucket", item->seqnum);
+            }
           }
         }
         GST_OBJECT_UNLOCK (rtx);
@@ -907,6 +1004,11 @@ gst_rtp_rtx_send_get_property (GObject * object,
       g_value_set_uint (value, rtx->num_rtx_packets);
       GST_OBJECT_UNLOCK (rtx);
       break;
+    case PROP_MAX_KBPS:
+      GST_OBJECT_LOCK (rtx);
+      g_value_set_int (value, rtx->max_kbps);
+      GST_OBJECT_UNLOCK (rtx);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -961,6 +1063,13 @@ gst_rtp_rtx_send_set_property (GObject * object,
     case PROP_MAX_SIZE_PACKETS:
       GST_OBJECT_LOCK (rtx);
       rtx->max_size_packets = g_value_get_uint (value);
+      GST_OBJECT_UNLOCK (rtx);
+      break;
+    case PROP_MAX_KBPS:
+      GST_OBJECT_LOCK (rtx);
+      rtx->max_kbps = g_value_get_int (value);
+      if (rtx->max_kbps != -1)
+        rtx->bucket_size = rtx->max_kbps * 1000;
       GST_OBJECT_UNLOCK (rtx);
       break;
     default:
