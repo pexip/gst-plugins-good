@@ -237,6 +237,9 @@ done:
   return NULL;
 
 too_small:
+  if (size == 0 && gst_adapter_available (self->adapter) > 0)
+    GST_WARNING_OBJECT (self, "Getting rid of %u bytes, "
+      "because of zero length packet", gst_adapter_available (self->adapter));
   GST_LOG_OBJECT (self, "Invalid rtp packet (too small), ignoring");
   gst_adapter_clear (self->adapter);
   self->started = FALSE;
