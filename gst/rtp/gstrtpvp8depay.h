@@ -55,9 +55,12 @@ struct _GstRtpVP8Depay
   gboolean started;
 
   gboolean caps_sent;
+  gboolean stop_lost_events;
+  GstEvent * last_lost_event;
   gint last_profile;
   gint last_width;
   gint last_height;
+  guint last_picture_id;
 };
 
 GType gst_rtp_vp8_depay_get_type (void);
@@ -67,3 +70,4 @@ gboolean gst_rtp_vp8_depay_plugin_init (GstPlugin * plugin);
 G_END_DECLS
 
 #endif /* #ifndef __GST_RTP_VP8_DEPAY_H__ */
+
