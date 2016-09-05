@@ -527,10 +527,12 @@ gst_rtp_rtx_send_get_tokens (GstRtpRtxSend * rtx, GstClock * clock)
     rtx->prev_time = current_time;
   }
 
+  /* don't allow more then a second of elapsed time */
+  elapsed_time = MIN (elapsed_time, GST_SECOND);
+
   /* calculate number of tokens and how much time is "spent" by these tokens */
   tokens =
-      gst_util_uint64_scale_int (elapsed_time, rtx->max_kbps * 1000,
-      GST_SECOND);
+      gst_util_uint64_scale (elapsed_time, rtx->max_kbps * 1000, GST_SECOND);
   token_time =
       gst_util_uint64_scale_int (GST_SECOND, tokens, rtx->max_kbps * 1000);
 
