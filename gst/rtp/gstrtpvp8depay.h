@@ -24,7 +24,6 @@
 #include <gst/rtp/gstrtpbasedepayload.h>
 
 G_BEGIN_DECLS
-
 #define GST_TYPE_RTP_VP8_DEPAY \
   (gst_rtp_vp8_depay_get_type())
 #define GST_RTP_VP8_DEPAY(obj) \
@@ -39,7 +38,6 @@ G_BEGIN_DECLS
 #define GST_RTP_VP8_DEPAY_GET_CLASS(obj) \
   (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_RTP_VP8_DEPAY, \
     GstRtpVP8DepayClass))
-
 typedef struct _GstRtpVP8Depay GstRtpVP8Depay;
 typedef struct _GstRtpVP8DepayClass GstRtpVP8DepayClass;
 
@@ -55,9 +53,12 @@ struct _GstRtpVP8Depay
   gboolean started;
 
   gboolean caps_sent;
+  gboolean stop_lost_events;
+  GstEvent *last_lost_event;
   gint last_profile;
   gint last_width;
   gint last_height;
+  guint last_picture_id;
 };
 
 GType gst_rtp_vp8_depay_get_type (void);
@@ -65,5 +66,4 @@ GType gst_rtp_vp8_depay_get_type (void);
 gboolean gst_rtp_vp8_depay_plugin_init (GstPlugin * plugin);
 
 G_END_DECLS
-
 #endif /* #ifndef __GST_RTP_VP8_DEPAY_H__ */
