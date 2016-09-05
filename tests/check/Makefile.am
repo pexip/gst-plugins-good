@@ -237,6 +237,7 @@ check_rtp = \
 	elements/rtph263 \
 	elements/rtph264 \
 	elements/rtph265 \
+	elements/rtpvp8 \
 	elements/rtpvp9
 else
 check_rtp =
