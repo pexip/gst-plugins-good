@@ -236,7 +236,8 @@ check_rtp = \
 	elements/rtph261 \
 	elements/rtph263 \
 	elements/rtph264 \
-	elements/rtpvp9
+	elements/rtpvp9 \
+	elements/rtpvp8
 else
 check_rtp =
 endif
