@@ -146,19 +146,22 @@ inc_picture_id (guint picture_id, guint new_picture_id)
 }
 
 static void
-send_last_lost_event (GstRtpVP8Depay *self)
+send_last_lost_event (GstRtpVP8Depay * self)
 {
   if (self->last_lost_event) {
-    GST_DEBUG_OBJECT (self, "Sending the last stopped lost event: %"GST_PTR_FORMAT, self->last_lost_event);
+    GST_DEBUG_OBJECT (self,
+        "Sending the last stopped lost event: %" GST_PTR_FORMAT,
+        self->last_lost_event);
     GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
-        ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self), self->last_lost_event);
+        ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
+        self->last_lost_event);
     gst_event_unref (self->last_lost_event);
     self->last_lost_event = NULL;
   }
 }
 
 static void
-send_last_lost_event_if_needed (GstRtpVP8Depay *self, guint new_picture_id)
+send_last_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id)
 {
   g_assert_cmpint (self->last_picture_id, !=, PICTURE_ID_NONE);
 
@@ -166,33 +169,35 @@ send_last_lost_event_if_needed (GstRtpVP8Depay *self, guint new_picture_id)
     gboolean send_lost_event = FALSE;
     if (new_picture_id == PICTURE_ID_NONE) {
       GST_DEBUG_OBJECT (self, "Sending the last stopped lost event "
-          "(picture id does not exist): %"GST_PTR_FORMAT, self->last_lost_event);
+          "(picture id does not exist): %" GST_PTR_FORMAT,
+          self->last_lost_event);
       send_lost_event = TRUE;
-    } else if (
-        IS_PICTURE_ID_15BITS (self->last_picture_id) &&
+    } else if (IS_PICTURE_ID_15BITS (self->last_picture_id) &&
         !IS_PICTURE_ID_15BITS (new_picture_id)) {
       GST_DEBUG_OBJECT (self, "Sending the last stopped lost event "
-          "(picture id has less bits than before): %"GST_PTR_FORMAT,
+          "(picture id has less bits than before): %" GST_PTR_FORMAT,
           self->last_lost_event);
       send_lost_event = TRUE;
     } else {
-      guint next_picture_id = inc_picture_id (
-          self->last_picture_id, new_picture_id);
+      guint next_picture_id =
+          inc_picture_id (self->last_picture_id, new_picture_id);
       if (new_picture_id != next_picture_id) {
         GST_DEBUG_OBJECT (self, "Sending the last stopped lost event "
-            "(gap in picture id %u %u): %"GST_PTR_FORMAT,
+            "(gap in picture id %u %u): %" GST_PTR_FORMAT,
             self->last_picture_id, new_picture_id, self->last_lost_event);
         send_lost_event = TRUE;
       }
     }
     if (send_lost_event)
       GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
-          ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self), self->last_lost_event);
+          ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
+          self->last_lost_event);
 
     gst_event_unref (self->last_lost_event);
     self->last_lost_event = NULL;
   }
 }
+
 static GstBuffer *
 gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
 {
@@ -238,7 +243,8 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     if ((data[1] & 0x20) != 0 || (data[1] & 0x10) != 0)
       hdrsize++;
   }
-  GST_DEBUG_OBJECT (depay, "hdrsize %u, size %u, picture id 0x%x", hdrsize, size, picture_id);
+  GST_DEBUG_OBJECT (depay, "hdrsize %u, size %u, picture id 0x%x", hdrsize,
+      size, picture_id);
   if (G_UNLIKELY (hdrsize >= size))
     goto too_small;
 
@@ -246,7 +252,8 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     /* Check if this is the start of a VP8 frame, otherwise bail */
     /* S=1 and PartID= 0 */
     if ((data[0] & 0x17) != 0x10) {
-      GST_DEBUG_OBJECT (depay, "The frame is missing the first packets, ignoring the packet");
+      GST_DEBUG_OBJECT (depay,
+          "The frame is missing the first packets, ignoring the packet");
       if (self->stop_lost_events) {
         send_last_lost_event (self);
         self->stop_lost_events = FALSE;
@@ -272,7 +279,9 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     GstBuffer *out;
     guint8 header[10];
 
-    GST_DEBUG_OBJECT (depay, "Found the end of the frame (%"G_GSIZE_FORMAT" bytes)", gst_adapter_available (self->adapter));
+    GST_DEBUG_OBJECT (depay,
+        "Found the end of the frame (%" G_GSIZE_FORMAT " bytes)",
+        gst_adapter_available (self->adapter));
     if (gst_adapter_available (self->adapter) < 10)
       goto too_small;
     gst_adapter_copy (self->adapter, &header, 0, 10);
@@ -403,7 +412,7 @@ gst_rtp_vp8_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
 {
   GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY (depay);
   if (self->stop_lost_events) {
-    GST_DEBUG_OBJECT (depay, "Stopping lost event %"GST_PTR_FORMAT, event);
+    GST_DEBUG_OBJECT (depay, "Stopping lost event %" GST_PTR_FORMAT, event);
     if (self->last_lost_event)
       gst_event_unref (self->last_lost_event);
     self->last_lost_event = gst_event_ref (event);
