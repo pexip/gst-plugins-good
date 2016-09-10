@@ -565,7 +565,7 @@ calculate_skew (RTPJitterBuffer * jbuf, guint64 ext_rtptime,
   /* if the difference between the sender timeline and the receiver timeline
    * changed too quickly we have to resync because the server likely restarted
    * its timestamps. */
-  if (ABS (delta - jbuf->skew) > GST_SECOND) {
+  if (ABS (delta - jbuf->skew) > GST_SECOND * 10) {
     GST_WARNING ("delta - skew: %" GST_TIME_FORMAT " too big, reset skew",
         GST_TIME_ARGS (ABS (delta - jbuf->skew)));
     rtp_jitter_buffer_resync (jbuf, time, gstrtptime, ext_rtptime, TRUE);
@@ -918,6 +918,7 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
     }
   }
 
+#if 0
   if (dts != -1 && pts + jbuf->delay < dts) {
     /* if we are going to produce a timestamp that is later than the input
      * timestamp, we need to reset the jitterbuffer. Likely the server paused
@@ -928,6 +929,7 @@ rtp_jitter_buffer_calculate_pts (RTPJitterBuffer * jbuf, GstClockTime dts,
     rtp_jitter_buffer_resync (jbuf, dts, gstrtptime, ext_rtptime, TRUE);
     pts = dts;
   }
+#endif
 
   jbuf->prev_out_time = pts;
   jbuf->prev_send_diff = gstrtptime - jbuf->base_rtptime;
