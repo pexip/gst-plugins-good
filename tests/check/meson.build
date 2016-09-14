@@ -80,6 +80,7 @@ good_tests = [
   [ 'elements/rtpmux' ],
   [ 'elements/rtprtx' ],
   [ 'elements/rtpsession' ],
+  [ 'elements/rtpssrcdemux' ],
   [ 'elements/rtpstorage' ],
   [ 'elements/rtpred' ],
   [ 'elements/rtpulpfec' ],
