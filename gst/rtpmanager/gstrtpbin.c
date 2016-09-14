@@ -805,6 +805,7 @@ create_session (GstRtpBin * rtpbin, gint id)
 
   /* configure SDES items */
   GST_OBJECT_LOCK (rtpbin);
+  g_object_set (demux, "max-streams", rtpbin->max_streams, NULL);
   g_object_set (session, "sdes", rtpbin->sdes, "rtp-profile",
       rtpbin->rtp_profile, "rtcp-sync-send-time", rtpbin->rtcp_sync_send_time,
       NULL);
@@ -1805,9 +1806,6 @@ create_stream (GstRtpBinSession * session, guint32 ssrc)
 
   rtpbin = session->bin;
 
-  if (g_slist_length (session->streams) >= rtpbin->max_streams)
-    goto max_streams;
-
   if (!(buffer = gst_element_factory_make ("rtpjitterbuffer", NULL)))
     goto no_jitterbuffer;
 
@@ -1887,12 +1885,6 @@ create_stream (GstRtpBinSession * session, guint32 ssrc)
   return stream;
 
   /* ERRORS */
-max_streams:
-  {
-    GST_WARNING_OBJECT (rtpbin, "stream exeeds maximum (%d)",
-        rtpbin->max_streams);
-    return NULL;
-  }
 no_jitterbuffer:
   {
     g_warning ("rtpbin: could not create rtpjitterbuffer element");
