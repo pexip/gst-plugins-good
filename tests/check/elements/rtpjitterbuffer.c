@@ -656,6 +656,9 @@ GST_START_TEST (test_two_lost_one_arrives_in_time)
   testclock = gst_harness_get_testclock (h);
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (0)));
@@ -742,6 +745,9 @@ GST_START_TEST (test_late_packets_still_makes_lost_events)
   testclock = gst_harness_get_testclock (h);
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* advance the clock with 10 seconds */
   gst_test_clock_set_time (testclock, 10 * GST_SECOND);
 
@@ -802,6 +808,9 @@ GST_START_TEST (test_num_late_when_considered_lost_arrives)
 
   gst_harness_set_src_caps (h, generate_caps ());
   g_object_set (h->element, "do-lost", do_lost, "latency", 100, NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
 
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
@@ -864,6 +873,9 @@ GST_START_TEST (test_lost_event_uses_pts)
   gst_harness_set_src_caps (h, generate_caps ());
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (0)));
@@ -916,6 +928,9 @@ GST_START_TEST (test_lost_event_with_backwards_rtptime)
 
   gst_harness_set_src_caps (h, generate_caps ());
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
 
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
@@ -1007,6 +1022,9 @@ GST_START_TEST (test_all_packets_are_timestamped_zero)
   gst_harness_set_src_caps (h, generate_caps ());
   testclock = gst_harness_get_testclock (h);
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
 
   /* advance the clock with 10 seconds */
   gst_test_clock_set_time (testclock, 10 * GST_SECOND);
@@ -1133,6 +1151,9 @@ GST_START_TEST (test_loss_equidistant_spacing_with_parameter_packets)
   gst_harness_set_src_caps (h, generate_caps ());
   testclock = gst_harness_get_testclock (h);
   g_object_set (h->element, "do-lost", TRUE, "latency", latency_ms, NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
 
   /* drop stream-start, caps, segment */
   for (int i = 0; i < 3; i++)
@@ -1565,6 +1586,9 @@ GST_START_TEST (test_rtx_buffer_arrives_too_late)
   g_object_set (h->element, "do-retransmission", TRUE, "latency", latency_ms,
       "do-lost", TRUE, "rtx-max-retries", 1, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* Push/pull buffers and advance time past buffer 0's timeout (in order to
    * simplify the test) */
   for (gint i = 0; i < num_init_buffers; i++) {
@@ -1849,6 +1873,9 @@ GST_START_TEST (test_rtx_buffer_arrives_after_lost_updates_rtx_stats)
   g_object_set (h->element, "do-retransmission", TRUE, "latency", latency_ms,
       "do-lost", TRUE, "rtx-max-retries", 1, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* Push/pull buffers and advance time past buffer 0's timeout (in order to
    * simplify the test) */
   for (gint i = 0; i < num_init_buffers; i++) {
@@ -2113,6 +2140,9 @@ GST_START_TEST (test_rtx_with_backwards_rtptime)
       "latency", jb_latency_ms,
       NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (0)));
@@ -2376,6 +2406,9 @@ GST_START_TEST (test_gap_larger_than_latency)
   testclock = gst_harness_get_testclock (h);
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* push first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (0)));
@@ -2492,6 +2525,9 @@ GST_START_TEST (test_considered_lost_packet_in_large_gap_arrives)
   testclock = gst_harness_get_testclock (h);
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* first push buffer 0 */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer_full (0 * PCMU_BUF_DURATION,
@@ -2547,6 +2583,40 @@ GST_START_TEST (test_considered_lost_packet_in_large_gap_arrives)
               "num-late", G_TYPE_UINT64, (guint64) 1, NULL)));
 
   gst_object_unref (testclock);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_latency_changed_event)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstEvent *event;
+
+  fail_unless_equals_int (0, gst_harness_events_received (h));
+
+  /* changing the latency should cause a downstream latency-changed event */
+  g_object_set (h->element, "latency", 20, NULL);
+
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_LATENCY_CHANGED, GST_EVENT_TYPE (event));
+  gst_event_unref (event);
+
+  fail_unless_equals_int (1, gst_harness_events_received (h));
+
+  /* same latency does not send the event again */
+  g_object_set (h->element, "latency", 20, NULL);
+  fail_unless_equals_int (1, gst_harness_events_received (h));
+
+  /* and changing again causes another one */
+  g_object_set (h->element, "latency", 40, NULL);
+
+  event = gst_harness_pull_event (h);
+  fail_unless_equals_int (GST_EVENT_LATENCY_CHANGED, GST_EVENT_TYPE (event));
+  gst_event_unref (event);
+
+  fail_unless_equals_int (2, gst_harness_events_received (h));
+
   gst_harness_teardown (h);
 }
 
@@ -2631,6 +2701,8 @@ rtpjitterbuffer_suite (void)
   tcase_add_loop_test (tc_chain,
       test_considered_lost_packet_in_large_gap_arrives, 0,
       G_N_ELEMENTS (test_considered_lost_packet_in_large_gap_arrives_input));
+
+  tcase_add_test (tc_chain, test_latency_changed_event);
 
   tcase_add_test (tc_chain, test_performance);
 
