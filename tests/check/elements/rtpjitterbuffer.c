@@ -879,6 +879,9 @@ GST_START_TEST (test_lost_event_uses_pts)
   gst_harness_set_src_caps (h, generate_caps ());
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
 
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
+
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (0)));
@@ -931,6 +934,9 @@ GST_START_TEST (test_lost_event_with_backwards_rtptime)
 
   gst_harness_set_src_caps (h, generate_caps ());
   g_object_set (h->element, "do-lost", TRUE, "latency", jb_latency_ms, NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
 
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
@@ -2140,6 +2146,9 @@ GST_START_TEST (test_rtx_with_backwards_rtptime)
       "do-retransmission", TRUE,
       "latency", jb_latency_ms,
       NULL);
+
+  /* pull out the latency-changed event */
+  gst_event_unref (gst_harness_pull_event (h));
 
   /* push the first buffer through */
   fail_unless_equals_int (GST_FLOW_OK,
