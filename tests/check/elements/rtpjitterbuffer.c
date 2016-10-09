@@ -412,7 +412,7 @@ generate_caps (void)
 }
 
 static GstBuffer *
-generate_test_buffer_full (GstClockTime gst_ts,
+generate_test_buffer_full (GstClockTime dts,
     gboolean marker_bit, guint seq_num, guint32 rtp_ts)
 {
   GstBuffer *buf;
@@ -421,8 +421,7 @@ generate_test_buffer_full (GstClockTime gst_ts,
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
 
   buf = gst_rtp_buffer_new_allocate (PCMU_BUF_SIZE, 0, 0);
-  GST_BUFFER_DTS (buf) = gst_ts;
-  GST_BUFFER_PTS (buf) = gst_ts;
+  GST_BUFFER_DTS (buf) = dts;
 
   gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp);
   gst_rtp_buffer_set_payload_type (&rtp, PCMU_BUF_PT);
