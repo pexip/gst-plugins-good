@@ -316,6 +316,7 @@ struct _GstRtpJitterBufferPrivate
   guint32 next_in_seqnum;
 
   GArray *timers;
+  GHashTable *timer_seqnum_hashmap;
   TimerQueue *rtx_stats_timers;
 
   /* start and stop ranges */
@@ -980,6 +981,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->last_rtptime = -1;
   priv->avg_jitter = 0;
   priv->timers = g_array_new (FALSE, TRUE, sizeof (TimerData));
+  priv->timer_seqnum_hashmap = g_hash_table_new (g_direct_hash, g_direct_equal);
   priv->rtx_stats_timers = timer_queue_new ();
   priv->jbuf = rtp_jitter_buffer_new ();
   g_mutex_init (&priv->jbuf_lock);
@@ -1084,6 +1086,7 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   priv = jitterbuffer->priv;
 
   g_array_free (priv->timers, TRUE);
+  g_hash_table_destroy (priv->timer_seqnum_hashmap);
   timer_queue_free (priv->rtx_stats_timers);
   g_mutex_clear (&priv->jbuf_lock);
   g_cond_clear (&priv->jbuf_timer);
@@ -2036,8 +2039,9 @@ timer_queue_find (TimerQueue * queue, guint16 seqnum)
   return g_hash_table_lookup (queue->hashtable, GINT_TO_POINTER (seqnum));
 }
 
+#if 1
 static TimerData *
-find_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
+_garray_find_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   TimerData *timer = NULL;
@@ -2051,6 +2055,44 @@ find_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
       break;
     }
   }
+  return timer;
+}
+
+#endif
+
+static TimerData *
+find_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
+{
+  gboolean found;
+  gpointer value;
+  guint idx;
+  TimerData *timer, *timer2;
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+
+  timer2 = _garray_find_timer (jitterbuffer, seqnum);
+
+  found = g_hash_table_lookup_extended (priv->timer_seqnum_hashmap,
+                                        GUINT_TO_POINTER (seqnum),
+                                        NULL,
+                                        &value);
+  if (!found) {
+    g_assert (timer2 == NULL);
+    return NULL;
+  }
+
+  idx = GPOINTER_TO_UINT (value);
+  g_assert (idx >= 0);
+  g_assert (idx < priv->timers->len);
+  timer = &g_array_index (priv->timers, TimerData, idx);
+
+  if (timer->seqnum != seqnum) {
+    g_assert (timer2 == NULL);
+    // ERLEND XXX: Could happen if timer->num > 1
+    return NULL;
+  }
+
+  g_assert (timer == timer2);
+
   return timer;
 }
 
@@ -2100,7 +2142,7 @@ recalculate_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
   }
 }
 
-static TimerData *
+static void
 add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
     guint16 seqnum, guint num, GstClockTime timeout, GstClockTime delay,
     GstClockTime duration)
@@ -2108,6 +2150,7 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   TimerData *timer;
   gint len;
+  guint16 i;
 
   GST_DEBUG_OBJECT (jitterbuffer,
       "add timer %d for seqnum %d to %" GST_TIME_FORMAT ", delay %"
@@ -2118,6 +2161,7 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
   g_array_set_size (priv->timers, len + 1);
   timer = &g_array_index (priv->timers, TimerData, len);
   timer->idx = len;
+
   timer->type = type;
   timer->seqnum = seqnum;
   timer->num = num;
@@ -2132,15 +2176,25 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
   timer->num_rtx_retry = 0;
   timer->num_rtx_received = 0;
   recalculate_timer (jitterbuffer, timer);
-  JBUF_SIGNAL_TIMER (priv);
 
-  return timer;
+  for (i = 0; i < num; i++) {
+    guint16 seqadd = seqnum + i;
+    // XXX: remove this check
+    g_assert (!g_hash_table_lookup_extended (priv->timer_seqnum_hashmap, GUINT_TO_POINTER (seqadd), NULL, NULL));
+
+    g_hash_table_insert (priv->timer_seqnum_hashmap,
+                         GUINT_TO_POINTER (seqadd),
+                         GUINT_TO_POINTER (len));
+  }
+
+  JBUF_SIGNAL_TIMER (priv);
 }
 
 static void
 reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     guint16 seqnum, GstClockTime timeout, GstClockTime delay, gboolean reset)
 {
+  guint16 i;
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   gboolean seqchange, timechange;
   guint16 oldseq;
@@ -2164,6 +2218,25 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
       GST_TIME_ARGS (timer->timeout), GST_TIME_ARGS (new_timeout));
 
   timer->timeout = new_timeout;
+
+  if (seqchange) {
+    for (i = 0; i < timer->num; i++) {
+      guint16 seqrem = timer->seqnum + i;
+      guint16 seqadd = seqnum + i;
+      // XXX: remove this check
+      g_assert (g_hash_table_lookup_extended (priv->timer_seqnum_hashmap, GUINT_TO_POINTER (seqrem), NULL, NULL));
+      // XXX: remove this check
+      g_assert (!g_hash_table_lookup_extended (priv->timer_seqnum_hashmap, GUINT_TO_POINTER (seqadd), NULL, NULL));
+
+      g_hash_table_remove (priv->timer_seqnum_hashmap,
+                           GUINT_TO_POINTER (seqrem));
+
+      g_hash_table_insert (priv->timer_seqnum_hashmap,
+                           GUINT_TO_POINTER (seqadd),
+                           GUINT_TO_POINTER (timer->idx));
+    }
+  }
+
   timer->seqnum = seqnum;
   if (reset) {
     GST_DEBUG_OBJECT (jitterbuffer, "reset rtx delay %" GST_TIME_FORMAT
@@ -2190,25 +2263,10 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
   }
 }
 
-static TimerData *
-set_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
-    guint16 seqnum, GstClockTime timeout)
-{
-  TimerData *timer;
-
-  /* find the seqnum timer */
-  timer = find_timer (jitterbuffer, seqnum);
-  if (timer == NULL) {
-    timer = add_timer (jitterbuffer, type, seqnum, 0, timeout, 0, -1);
-  } else {
-    reschedule_timer (jitterbuffer, timer, seqnum, timeout, 0, FALSE);
-  }
-  return timer;
-}
-
 static void
 remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
 {
+  guint16 i;
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   guint idx;
 
@@ -2218,10 +2276,34 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
   if (priv->clock_id && priv->timer_seqnum == timer->seqnum)
     unschedule_current_timer (jitterbuffer);
 
+  for (i = 0; i < timer->num; i++) {
+    guint16 seqrem = timer->seqnum + i;
+    // XXX: remove this check
+    g_assert (g_hash_table_lookup_extended (priv->timer_seqnum_hashmap, GUINT_TO_POINTER (seqrem), NULL, NULL));
+
+    g_hash_table_remove (priv->timer_seqnum_hashmap,
+                         GUINT_TO_POINTER (seqrem));
+  }
+
   idx = timer->idx;
+  g_assert (idx >= 0);
+  g_assert (idx < priv->timers->len);
   GST_DEBUG_OBJECT (jitterbuffer, "removed index %d", idx);
   g_array_remove_index_fast (priv->timers, idx);
-  timer->idx = idx;
+
+  if (idx < priv->timers->len) {
+    timer->idx = idx;
+
+    for (i = 0; i < timer->num; i++) {
+      guint16 sequpd = timer->seqnum + i;
+      // XXX: remove this check
+      g_assert (g_hash_table_lookup_extended (priv->timer_seqnum_hashmap, GUINT_TO_POINTER (sequpd), NULL, NULL));
+
+      g_hash_table_insert (priv->timer_seqnum_hashmap,
+                           GUINT_TO_POINTER (sequpd),
+                           GUINT_TO_POINTER (idx));
+    }
+  }
 }
 
 static void
@@ -2230,6 +2312,11 @@ remove_all_timers (GstRtpJitterBuffer * jitterbuffer)
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GST_DEBUG_OBJECT (jitterbuffer, "removed all timers");
   g_array_set_size (priv->timers, 0);
+
+  // XXX
+  g_hash_table_destroy (priv->timer_seqnum_hashmap);
+  priv->timer_seqnum_hashmap = g_hash_table_new (g_direct_hash, g_direct_equal);
+
   unschedule_current_timer (jitterbuffer);
 }
 
@@ -2256,13 +2343,12 @@ get_rtx_delay (GstRtpJitterBufferPrivate * priv)
   return delay;
 }
 
-/* Check if packet with seqnum is already considered definitely lost by being
- * part of a "lost timer" for multiple packets */
 static gboolean
-already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
+_already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
-  gint i, len;
+  gint i;
+  gsize len;
 
   len = priv->timers->len;
   for (i = 0; i < len; i++) {
@@ -2278,6 +2364,56 @@ already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
   }
 
   return FALSE;
+}
+
+/* Check if packet with seqnum is already considered definitely lost by being
+ * part of a "lost timer" for multiple packets */
+static gboolean
+already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
+{
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  gint gap;
+  gboolean found;
+  gboolean lost;
+  gpointer value;
+  guint idx;
+  TimerData *timer;
+
+  found = g_hash_table_lookup_extended (priv->timer_seqnum_hashmap,
+                                        GUINT_TO_POINTER (seqnum),
+                                        NULL,
+                                        &value);
+  if (!found) {
+    g_assert (FALSE == _already_lost (jitterbuffer, seqnum));
+    return FALSE;
+  }
+
+  idx = GPOINTER_TO_UINT (value);
+  g_assert (idx < priv->timers->len);
+  timer = &g_array_index (priv->timers, TimerData, idx);
+  gap = gst_rtp_buffer_compare_seqnum (timer->seqnum, seqnum);
+  g_assert (gap >= 0 && gap < timer->num);
+  lost = (timer->num > 1 && timer->type == TIMER_TYPE_LOST);
+  g_assert (lost == _already_lost (jitterbuffer, seqnum));
+  return lost;
+
+#if 0
+
+  len = priv->timers->len;
+  for (i = 0; i < len; i++) {
+    TimerData *test = &g_array_index (priv->timers, TimerData, i);
+    gint gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
+
+    if (test->num > 1 && test->type == TIMER_TYPE_LOST && gap >= 0 &&
+        gap < test->num) {
+      GST_DEBUG ("seqnum #%d already considered definitely lost (#%d->#%d)",
+          seqnum, test->seqnum, (test->seqnum + test->num - 1) & 0xffff);
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+#endif
 }
 
 /* we just received a packet with seqnum and dts.
@@ -2307,6 +2443,8 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       TimerData *test = &g_array_index (priv->timers, TimerData, i);
       gint gap;
 
+      g_assert (test->idx == i);
+
       gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
 
       GST_DEBUG_OBJECT (jitterbuffer, "%d, #%d<->#%d gap %d",
@@ -2318,6 +2456,8 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
         if (test->num_rtx_retry == 0 && test->type == TIMER_TYPE_EXPECTED)
           reschedule_timer (jitterbuffer, test, test->seqnum, -1, 0, FALSE);
       }
+
+      g_assert (test->idx == i);
     }
   }
 #endif
@@ -2367,7 +2507,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       reschedule_timer (jitterbuffer, timer, priv->next_in_seqnum, expected,
           delay, TRUE);
     } else {
-      add_timer (jitterbuffer, TIMER_TYPE_EXPECTED, priv->next_in_seqnum, 0,
+      add_timer (jitterbuffer, TIMER_TYPE_EXPECTED, priv->next_in_seqnum, 1,
           expected, delay, priv->packet_spacing);
     }
   } else if (timer && timer->type != TIMER_TYPE_DEADLINE) {
@@ -2520,7 +2660,7 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
   }
 
   while (gst_rtp_buffer_compare_seqnum (expected, seqnum) > 0) {
-    add_timer (jitterbuffer, type, expected, 0, expected_pts, delay, duration);
+    add_timer (jitterbuffer, type, expected, 1, expected_pts, delay, duration);
     expected_pts += duration;
     expected++;
   }
@@ -2926,7 +3066,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     /* we don't know what the next_in_seqnum should be, wait for the last
      * possible moment to push this buffer, maybe we get an earlier seqnum
      * while we wait */
-    set_timer (jitterbuffer, TIMER_TYPE_DEADLINE, seqnum, pts);
+    add_timer (jitterbuffer, TIMER_TYPE_DEADLINE, seqnum, 1, pts, 0,
+        GST_CLOCK_TIME_NONE);
 
     do_next_seqnum = TRUE;
     /* take rtptime and pts to calculate packet spacing */
@@ -3257,7 +3398,8 @@ update_estimated_eos (GstRtpJitterBuffer * jitterbuffer,
       GST_TIME_FORMAT, GST_TIME_ARGS (elapsed), GST_TIME_ARGS (estimated));
 
   if (estimated != -1 && priv->estimated_eos != estimated) {
-    set_timer (jitterbuffer, TIMER_TYPE_EOS, -1, estimated);
+    add_timer (jitterbuffer, TIMER_TYPE_EOS, -1, 0, estimated, 0,
+        GST_CLOCK_TIME_NONE);
     priv->estimated_eos = estimated;
   }
 }
