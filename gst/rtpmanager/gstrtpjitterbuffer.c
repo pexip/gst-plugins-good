@@ -2067,12 +2067,13 @@ unschedule_current_timer (GstRtpJitterBuffer * jitterbuffer)
 }
 
 static GstClockTime
-get_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
+get_timeout (GstRtpJitterBuffer * jitterbuffer, const TimerData * timer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GstClockTime test_timeout;
 
-  if ((test_timeout = timer->timeout) == -1)
+  test_timeout = timer->timeout;
+  if (test_timeout == -1)
     return -1;
 
   if (timer->type != TIMER_TYPE_EXPECTED) {
@@ -2296,6 +2297,8 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
+// XXX: make this work
+#if 1
   /* go through all timers and unschedule the ones with a large gap */
   if (priv->do_retransmission && priv->rtx_delay_reorder > 0) {
     gint i, len;
@@ -2317,6 +2320,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       }
     }
   }
+#endif
 
   do_next_seqnum = do_next_seqnum && priv->packet_spacing > 0
       && priv->do_retransmission && priv->rtx_next_seqnum;
@@ -2935,19 +2939,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     gap = gst_rtp_buffer_compare_seqnum (expected, seqnum);
     GST_DEBUG_OBJECT (jitterbuffer, "expected #%d, got #%d, gap of %d",
         expected, seqnum, gap);
-
-    if (G_UNLIKELY (gap > 0 && priv->timers->len >= max_dropout)) {
-      /* If we have timers for more than RTP_MAX_DROPOUT packets
-       * pending this means that we have a huge gap overall. We can
-       * reset the jitterbuffer at this point because there's
-       * just too much data missing to be able to do anything
-       * sensible with the past data. Just try again from the
-       * next packet */
-      GST_WARNING_OBJECT (jitterbuffer, "%d pending timers > %d - resetting",
-          priv->timers->len, max_dropout);
-      gst_buffer_unref (buffer);
-      return gst_rtp_jitter_buffer_reset (jitterbuffer, pad, parent, seqnum);
-    }
 
     /* Special handling of large gaps */
     if ((gap != -1 && gap < -max_misorder) || (gap >= max_dropout)) {
@@ -3683,6 +3674,7 @@ do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     timer->rtx_delay = 0;
     timer->rtx_retry = 0;
   }
+
   reschedule_timer (jitterbuffer, timer, timer->seqnum,
       timer->rtx_base + timer->rtx_retry, timer->rtx_delay, FALSE);
 
@@ -3751,6 +3743,7 @@ do_lost_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     timer_queue_append (priv->rtx_stats_timers, timer,
         now + priv->rtx_stats_timeout * GST_MSECOND, TRUE);
   }
+
   remove_timer (jitterbuffer, timer);
 
   if (head)
