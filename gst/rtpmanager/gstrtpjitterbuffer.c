@@ -2396,24 +2396,36 @@ already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
   lost = (timer->num > 1 && timer->type == TIMER_TYPE_LOST);
   g_assert (lost == _already_lost (jitterbuffer, seqnum));
   return lost;
+}
 
-#if 0
+/* Time out (reschedule as immediate) the timer of every packet that we
+ * are still expecting where the seqnum precedes the current seqnum by
+ * more than the max reorder distance, and for which we have not yet
+ * sent an RTX request.
+ */
+static void
+time_out_reordered_packets (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
+{
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
+  gint i, len;
   len = priv->timers->len;
   for (i = 0; i < len; i++) {
     TimerData *test = &g_array_index (priv->timers, TimerData, i);
-    gint gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
+    gint gap;
 
-    if (test->num > 1 && test->type == TIMER_TYPE_LOST && gap >= 0 &&
-        gap < test->num) {
-      GST_DEBUG ("seqnum #%d already considered definitely lost (#%d->#%d)",
-          seqnum, test->seqnum, (test->seqnum + test->num - 1) & 0xffff);
-      return TRUE;
+    gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
+
+    GST_DEBUG_OBJECT (jitterbuffer, "%d, #%d<->#%d gap %d",
+        test->type, test->seqnum, seqnum, gap);
+
+    if (gap > priv->rtx_delay_reorder) {
+      /* max gap, we exceeded the max reorder distance and we don't expect the
+       * missing packet to be this reordered */
+      if (test->num_rtx_retry == 0 && test->type == TIMER_TYPE_EXPECTED)
+        reschedule_timer (jitterbuffer, test, test->seqnum, -1, 0, FALSE);
     }
   }
-
-  return FALSE;
-#endif
 }
 
 /* we just received a packet with seqnum and dts.
@@ -2433,34 +2445,10 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
-// XXX: make this work
-#if 1
   /* go through all timers and unschedule the ones with a large gap */
   if (priv->do_retransmission && priv->rtx_delay_reorder > 0) {
-    gint i, len;
-    len = priv->timers->len;
-    for (i = 0; i < len; i++) {
-      TimerData *test = &g_array_index (priv->timers, TimerData, i);
-      gint gap;
-
-      g_assert (test->idx == i);
-
-      gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
-
-      GST_DEBUG_OBJECT (jitterbuffer, "%d, #%d<->#%d gap %d",
-          test->type, test->seqnum, seqnum, gap);
-
-      if (gap > priv->rtx_delay_reorder) {
-        /* max gap, we exceeded the max reorder distance and we don't expect the
-         * missing packet to be this reordered */
-        if (test->num_rtx_retry == 0 && test->type == TIMER_TYPE_EXPECTED)
-          reschedule_timer (jitterbuffer, test, test->seqnum, -1, 0, FALSE);
-      }
-
-      g_assert (test->idx == i);
-    }
+    time_out_reordered_packets (jitterbuffer, seqnum);
   }
-#endif
 
   do_next_seqnum = do_next_seqnum && priv->packet_spacing > 0
       && priv->do_retransmission && priv->rtx_next_seqnum;
