@@ -1157,7 +1157,7 @@ stream_set_ts_offset (GstRtpBin * bin, GstRtpBinStream * stream,
         GST_DEBUG_OBJECT (bin, "offset too small, ignoring");
         return;
       }
-      if (ABS (diff) > (200 * GST_MSECOND)) {
+      if (ABS (diff) > (3 * GST_SECOND)) {
         GST_WARNING_OBJECT (bin, "offset unusually large, ignoring");
         return;
       }
