@@ -2213,6 +2213,58 @@ arrival(dts):  3     5     5
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtx_timer_reuse)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstTestClock *testclock;
+  gint latency_ms = 5 * PCMU_BUF_MS;
+  gint num_init_buffers = latency_ms / PCMU_BUF_MS + 1;
+
+  testclock = gst_harness_get_testclock (h);
+  gst_harness_set_src_caps (h, generate_caps ());
+  g_object_set (h->element, "do-retransmission", TRUE, "latency", latency_ms,
+      "do-lost", TRUE, "rtx-max-retries", 1, NULL);
+
+  /* Push/pull buffers and advance time past buffer 0's timeout (in order to
+   * simplify the test) */
+  for (gint i = 0; i < num_init_buffers; i++) {
+    gst_test_clock_set_time (testclock, i * PCMU_BUF_DURATION);
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_harness_push (h, generate_test_buffer (i)));
+    gst_harness_wait_for_clock_id_waits (h, 1, 60);
+  }
+
+  gst_harness_crank_single_clock_wait (h);
+  fail_unless_equals_int64 (latency_ms * GST_MSECOND,
+      gst_clock_get_time (GST_CLOCK (testclock)));
+
+  for (gint i = 0; i < num_init_buffers; i++)
+    gst_buffer_unref (gst_harness_pull (h));
+
+  /* drop reconfigure event */
+  gst_event_unref (gst_harness_pull_upstream_event (h));
+
+  /* crank to timeout the only rtx-request, and the timer will
+   * now reschedule as a lost-timer internally */
+  gst_harness_crank_single_clock_wait (h);
+  verify_rtx_event (gst_harness_pull_upstream_event (h),
+      6, 6 * PCMU_BUF_DURATION, 10, PCMU_BUF_DURATION);
+
+  /* but now buffer 6 arrives, and this should now reuse the lost-timer
+   * for 6, as an expected-timer for 7 */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h, generate_test_buffer (6)));
+
+  /* now crank to timeout the expected-timer for 7 and verify */
+  gst_harness_crank_single_clock_wait (h);
+  verify_rtx_event (gst_harness_pull_upstream_event (h),
+      7, 7 * PCMU_BUF_DURATION, 10, PCMU_BUF_DURATION);
+
+  gst_object_unref (testclock);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
 
 GST_START_TEST (test_gap_exceeds_latency)
 {
@@ -2701,6 +2753,7 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_rtx_rtt_larger_than_retry_timeout);
   tcase_add_test (tc_chain, test_rtx_no_request_if_time_past_retry_period);
   tcase_add_test (tc_chain, test_rtx_with_backwards_rtptime);
+  tcase_add_test (tc_chain, test_rtx_timer_reuse);
 
   tcase_add_test (tc_chain, test_gap_exceeds_latency);
   tcase_add_test (tc_chain, test_deadline_ts_offset);
