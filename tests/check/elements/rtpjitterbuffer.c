@@ -902,7 +902,8 @@ GST_START_TEST (test_lost_event_uses_pts)
   /* advance the clock to the latest possible time buffer 4 could arrive */
   now = i * PCMU_BUF_DURATION + jb_latency_ms * GST_MSECOND;
   gst_harness_set_time (h, now);
-  gst_harness_push (h, generate_test_buffer_full (now, FALSE, i, i * PCMU_RTP_TS_DURATION));
+  gst_harness_push (h, generate_test_buffer_full (now, FALSE, i,
+          i * PCMU_RTP_TS_DURATION));
 
   /* drop GstEventStreamStart & GstEventCaps & GstEventSegment */
   for (int i = 0; i < 3; i++)
@@ -952,45 +953,45 @@ GST_START_TEST (test_lost_event_with_backwards_rtptime)
   }
 
   /*
-     For video using B-frames, an expected sequence
-     could be like this:
-     (I = I-frame, P = P-frame, B = B-frame)
-               ___   ___   ___   ___   ___
-          ... | 3 | | 4 | | 5 | | 6 | | 7 |
-               –––   –––   –––   –––   –––
-    rtptime:   3(I)  5(P)  5(P)  4(B)  6(P)
-arrival(dts):  3     5     5     5     6
-
-     Notice here that packet 6 (the B frame) make
-     the rtptime go backwards.
-
-     But we get this:
-               ___   ___   _ _   ___   ___
-          ... | 3 | | 4 | |   | | 6 | | 7 |
-               –––   –––   - -   –––   –––
-     rtptime:  3(I)  5(P)        4(B)  6(P)
-arrival(dts):  3     5           5     6
-
-  */
+   * For video using B-frames, an expected sequence
+   * could be like this:
+   * (I = I-frame, P = P-frame, B = B-frame)
+   *               ___   ___   ___   ___   ___
+   *          ... | 3 | | 4 | | 5 | | 6 | | 7 |
+   *               –––   –––   –––   –––   –––
+   * rtptime:       3(I)  5(P)  5(P)  4(B)  6(P)
+   * arrival(dts):  3     5     5     5     6
+   *
+   * Notice here that packet 6 (the B frame) make
+   * the rtptime go backwards.
+   *
+   * But we get this:
+   *               ___   ___   _ _   ___   ___
+   *          ... | 3 | | 4 | |   | | 6 | | 7 |
+   *               –––   –––   - -   –––   –––
+   * rtptime:       3(I)  5(P)        4(B)  6(P)
+   * arrival(dts):  3     5           5     6
+   *
+   */
 
   /* seqnum 3 */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (3)));
   gst_buffer_unref (gst_harness_pull (h));
 
-   /* seqnum 4, arriving at time 5 with rtptime 5 */
-   gst_harness_push (h, generate_test_buffer_full (
-      5 * PCMU_BUF_DURATION, FALSE, 4, 5 * PCMU_RTP_TS_DURATION));
+  /* seqnum 4, arriving at time 5 with rtptime 5 */
+  gst_harness_push (h, generate_test_buffer_full (5 * PCMU_BUF_DURATION, FALSE,
+          4, 5 * PCMU_RTP_TS_DURATION));
   gst_buffer_unref (gst_harness_pull (h));
 
   /* seqnum 6, arriving at time 5 with rtptime 4,
      making a gap for missing seqnum 5 */
-  gst_harness_push (h, generate_test_buffer_full (
-      5 * PCMU_BUF_DURATION, FALSE, 6, 4 * PCMU_RTP_TS_DURATION));
+  gst_harness_push (h, generate_test_buffer_full (5 * PCMU_BUF_DURATION, FALSE,
+          6, 4 * PCMU_RTP_TS_DURATION));
 
   /* seqnum 7, arriving at time 6 with rtptime 6 */
-  gst_harness_push (h, generate_test_buffer_full (
-      6 * PCMU_BUF_DURATION, FALSE, 7, 6 * PCMU_RTP_TS_DURATION));
+  gst_harness_push (h, generate_test_buffer_full (6 * PCMU_BUF_DURATION, FALSE,
+          7, 6 * PCMU_RTP_TS_DURATION));
 
   /* drop GstEventStreamStart & GstEventCaps & GstEventSegment */
   for (int i = 0; i < 3; i++)
@@ -1319,21 +1320,22 @@ GST_START_TEST (test_rtx_two_missing)
   gst_event_unref (gst_harness_pull_upstream_event (h));
 
   /*
-     The expected sequence of buffers is this:
-     ____   ____   ____   ____
-     ... | 10 | | 11 | | 12 | | 13 |
-     ––––   ––––   ––––   ––––
-     200ms  220ms  240ms  260ms
-
-     But instead we get this:
-     ____    _ _    _ _   ____
-     ... | 10 |  |   |  |   | | 13 |
-     ––––    - -    - -   ––––
-     200ms                260ms
-
-     Now it is important to note that the next thing that happens is that
-     the RTX timeout for packet 11 will happen at time 230ms, so we crank
-     the timer thread to advance the time to this: */
+   * The expected sequence of buffers is this:
+   *      ____   ____   ____   ____
+   * ... | 10 | | 11 | | 12 | | 13 |
+   *      ––––   ––––   ––––   ––––
+   *      200ms  220ms  240ms  260ms
+   *
+   * But instead we get this:
+   *      ____    _ _    _ _   ____
+   * ... | 10 |  |   |  |   | | 13 |
+   *      ––––    - -    - -   ––––
+   *      200ms                260ms
+   *
+   * Now it is important to note that the next thing that happens is that
+   * the RTX timeout for packet 11 will happen at time 230ms, so we crank
+   * the timer thread to advance the time to this:
+   */
   gst_harness_crank_single_clock_wait (h);
   rtx_delay_ms = PCMU_BUF_MS / 2;
   verify_rtx_event (gst_harness_pull_upstream_event (h),
@@ -1353,25 +1355,26 @@ GST_START_TEST (test_rtx_two_missing)
               13 * PCMU_RTP_TS_DURATION)));
 
   /*
-
-     This will estimate the dts on the two missing packets to:
-     ____   ____
-     ... | 11 | | 12 | ...
-     ––––   ––––
-     220ms  240ms
-
-     And given their regular interspacing of 20ms, it will schedule two RTX
-     timers for them like so:
-
-     ____   ____
-     ... | 11 | | 12 | ...
-     ––––   ––––
-     230ms  250ms
-
-     There are however two problems, packet 11 we have already sent one RTX for
-     and its timeout is currently at 270ms, so we should not tamper with that,
-     and as for packet 12, 250ms has already expired, so we now expect to see
-     an rtx-event being sent for packet 12 immediately: */
+   *
+   * This will estimate the dts on the two missing packets to:
+   *      ____   ____
+   * ... | 11 | | 12 | ...
+   *      ––––   ––––
+   *      220ms  240ms
+   *
+   * And given their regular interspacing of 20ms, it will schedule two RTX
+   * timers for them like so:
+   *
+   *      ____   ____
+   * ... | 11 | | 12 | ...
+   *      ––––   ––––
+   *      230ms  250ms
+   *
+   * There are however two problems, packet 11 we have already sent one RTX for
+   * and its timeout is currently at 270ms, so we should not tamper with that,
+   * and as for packet 12, 250ms has already expired, so we now expect to see
+   * an rtx-event being sent for packet 12 immediately:
+   */
   verify_rtx_event (gst_harness_pull_upstream_event (h),
       12, 12 * PCMU_BUF_DURATION, rtx_delay_ms, PCMU_BUF_DURATION);
 
@@ -1425,8 +1428,8 @@ GST_START_TEST (test_rtx_packet_delay)
    * retransmission right away */
   gst_harness_set_time (h, 1 * PCMU_BUF_DURATION);
   fail_unless_equals_int (GST_FLOW_OK,
-      gst_harness_push (h, generate_test_buffer_full (1 * PCMU_BUF_DURATION, TRUE, 8,
-              1 * PCMU_RTP_TS_DURATION)));
+      gst_harness_push (h, generate_test_buffer_full (1 * PCMU_BUF_DURATION,
+              TRUE, 8, 1 * PCMU_RTP_TS_DURATION)));
 
   /* drop reconfigure event */
   gst_event_unref (gst_harness_pull_upstream_event (h));
@@ -1447,8 +1450,8 @@ GST_START_TEST (test_rtx_packet_delay)
 
   /* push 9, this should immediately request retransmission of 5 */
   fail_unless_equals_int (GST_FLOW_OK,
-      gst_harness_push (h, generate_test_buffer_full (1 * PCMU_BUF_DURATION, TRUE, 9,
-              1 * PCMU_RTP_TS_DURATION)));
+      gst_harness_push (h, generate_test_buffer_full (1 * PCMU_BUF_DURATION,
+              TRUE, 9, 1 * PCMU_RTP_TS_DURATION)));
 
   /* we should now receive retransmission requests for 5 */
   out_event = gst_harness_pull_upstream_event (h);
@@ -2148,9 +2151,7 @@ GST_START_TEST (test_rtx_with_backwards_rtptime)
 
   gst_harness_set_src_caps (h, generate_caps ());
   g_object_set (h->element,
-      "do-retransmission", TRUE,
-      "latency", jb_latency_ms,
-      NULL);
+      "do-retransmission", TRUE, "latency", jb_latency_ms, NULL);
 
   /* pull out the latency-changed event */
   gst_event_unref (gst_harness_pull_event (h));
@@ -2169,32 +2170,32 @@ GST_START_TEST (test_rtx_with_backwards_rtptime)
   }
 
   /*
-     For video using B-frames, an expected sequence
-     could be like this:
-     (I = I-frame, P = P-frame, B = B-frame)
-               ___   ___   ___
-          ... | 3 | | 4 | | 5 |
-               –––   –––   –––
-    rtptime:   3(I)  5(P)  4(B)
-arrival(dts):  3     5     5
-
-     Notice here that packet 5 (the B frame) make
-     the rtptime go backwards.
-  */
+   * For video using B-frames, an expected sequence
+   * could be like this:
+   * (I = I-frame, P = P-frame, B = B-frame)
+   *               ___   ___   ___
+   *          ... | 3 | | 4 | | 5 |
+   *               –––   –––   –––
+   * rtptime:       3(I)  5(P)  4(B)
+   * arrival(dts):  3     5     5
+   *
+   * Notice here that packet 5 (the B frame) make
+   * the rtptime go backwards.
+   */
 
   /* seqnum 3, arriving at time 3 with rtptime 3 */
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (3)));
   gst_buffer_unref (gst_harness_pull (h));
 
-   /* seqnum 4, arriving at time 5 with rtptime 5 */
-   gst_harness_push (h, generate_test_buffer_full (
-      5 * PCMU_BUF_DURATION, FALSE, 4, 5 * PCMU_RTP_TS_DURATION));
+  /* seqnum 4, arriving at time 5 with rtptime 5 */
+  gst_harness_push (h, generate_test_buffer_full (5 * PCMU_BUF_DURATION, FALSE,
+          4, 5 * PCMU_RTP_TS_DURATION));
   gst_buffer_unref (gst_harness_pull (h));
 
   /* seqnum 5, arriving at time 5 with rtptime 4 */
-  gst_harness_push (h, generate_test_buffer_full (
-      5 * PCMU_BUF_DURATION, FALSE, 5, 4 * PCMU_RTP_TS_DURATION));
+  gst_harness_push (h, generate_test_buffer_full (5 * PCMU_BUF_DURATION, FALSE,
+          5, 4 * PCMU_RTP_TS_DURATION));
 
   /* drop reconfigure event */
   gst_event_unref (gst_harness_pull_upstream_event (h));
