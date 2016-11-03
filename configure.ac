@@ -900,6 +900,10 @@ AG_GST_CHECK_FEATURE(VPX_SSE, [vpx sse], vpx-sse, [
       AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
       AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
     ], [true])
+
+    PKG_CHECK_MODULES(VPX_SSE_140, vpx-sse >= 1.4.0, [
+      AC_DEFINE(HAVE_VPX_1_4, 1, [Defined if the VPX library version is 1.4 or bigger])
+    ], [true])
   ], [
     HAVE_VPX_SSE="no"
   ])
@@ -920,6 +924,10 @@ AG_GST_CHECK_FEATURE(VPX_AVX, [vpx avx], vpx-avx, [
       AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
       AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
     ], [true])
+
+    PKG_CHECK_MODULES(VPX_AVX_140, vpx-avx >= 1.4.0, [
+      AC_DEFINE(HAVE_VPX_1_4, 1, [Defined if the VPX library version is 1.4 or bigger])
+    ], [true])
   ], [
     HAVE_VPX_AVX="no"
   ])
@@ -939,6 +947,10 @@ AG_GST_CHECK_FEATURE(VPX_AVX2, [vpx avx2], vpx-avx2, [
       HAVE_VP9_AVX2="yes"
       AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
       AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
+    ], [true])
+
+    PKG_CHECK_MODULES(VPX_AVX2_140, vpx-avx2 >= 1.4.0, [
+      AC_DEFINE(HAVE_VPX_1_4, 1, [Defined if the VPX library version is 1.4 or bigger])
     ], [true])
   ], [
     HAVE_VPX_AVX2="no"
