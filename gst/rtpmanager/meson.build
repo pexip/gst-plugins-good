@@ -9,6 +9,7 @@ rtpmanager_sources = [
   'gstrtprtxreceive.c',
   'gstrtprtxsend.c',
   'gstrtpssrcdemux.c',
+  'jbtimers.c',
   'rtpjitterbuffer.c',
   'rtpsession.c',
   'rtpsource.c',
