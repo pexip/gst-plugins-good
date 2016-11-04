@@ -111,6 +111,8 @@ static void gst_rtp_rtx_send_finalize (GObject * object);
 
 G_DEFINE_TYPE (GstRtpRtxSend, gst_rtp_rtx_send, GST_TYPE_ELEMENT);
 
+#define IS_RTX_ENABLED(rtx) (g_hash_table_size ((rtx)->rtx_pt_map) > 0)
+
 typedef struct
 {
   guint16 seqnum;
@@ -152,6 +154,59 @@ ssrc_rtx_data_free (SSRCRtxData * data)
 {
   g_sequence_free (data->queue);
   g_slice_free (SSRCRtxData, data);
+}
+
+typedef enum
+{
+  RTX_TASK_START,
+  RTX_TASK_PAUSE,
+  RTX_TASK_STOP,
+} RtxTaskState;
+
+static void
+gst_rtp_rtx_send_set_flushing (GstRtpRtxSend * rtx, gboolean flush)
+{
+  GST_OBJECT_LOCK (rtx);
+  gst_data_queue_set_flushing (rtx->queue, flush);
+  gst_data_queue_flush (rtx->queue);
+  GST_OBJECT_UNLOCK (rtx);
+}
+
+static gboolean
+gst_rtp_rtx_send_set_task_state (GstRtpRtxSend * rtx, RtxTaskState task_state)
+{
+  GstTask *task = GST_PAD_TASK (rtx->srcpad);
+  gboolean ret = TRUE;
+
+  switch (task_state) {
+    case RTX_TASK_START:
+    {
+      gboolean active = task && GST_TASK_STATE (task) == GST_TASK_STARTED;
+      if (IS_RTX_ENABLED (rtx) && !active) {
+        GST_DEBUG_OBJECT (rtx, "Starting RTX task");
+        gst_rtp_rtx_send_set_flushing (rtx, FALSE);
+        ret = gst_pad_start_task (rtx->srcpad,
+            (GstTaskFunction) gst_rtp_rtx_send_src_loop, rtx, NULL);
+      }
+      break;
+    }
+    case RTX_TASK_PAUSE:
+      if (task) {
+        GST_DEBUG_OBJECT (rtx, "Pausing RTX task");
+        gst_rtp_rtx_send_set_flushing (rtx, TRUE);
+        ret = gst_pad_pause_task (rtx->srcpad);
+      }
+      break;
+    case RTX_TASK_STOP:
+      if (task) {
+        GST_DEBUG_OBJECT (rtx, "Stopping RTX task");
+        gst_rtp_rtx_send_set_flushing (rtx, TRUE);
+        ret = gst_pad_stop_task (rtx->srcpad);
+      }
+      break;
+  }
+
+  return ret;
 }
 
 static void
@@ -300,15 +355,6 @@ gst_rtp_rtx_send_init (GstRtpRtxSend * rtx)
   rtx->max_size_time = DEFAULT_MAX_SIZE_TIME;
   rtx->max_size_packets = DEFAULT_MAX_SIZE_PACKETS;
   rtx->prev_time = GST_CLOCK_TIME_NONE;
-}
-
-static void
-gst_rtp_rtx_send_set_flushing (GstRtpRtxSend * rtx, gboolean flush)
-{
-  GST_OBJECT_LOCK (rtx);
-  gst_data_queue_set_flushing (rtx->queue, flush);
-  gst_data_queue_flush (rtx->queue);
-  GST_OBJECT_UNLOCK (rtx);
 }
 
 static gboolean
@@ -501,8 +547,7 @@ gst_rtp_rtx_send_get_tokens (GstRtpRtxSend * rtx, GstClock * clock)
   /* calculate number of tokens and how much time is "spent" by these tokens */
   tokens =
       gst_util_uint64_scale (elapsed_time, rtx->max_kbps * 1000, GST_SECOND);
-  token_time =
-      gst_util_uint64_scale (GST_SECOND, tokens, rtx->max_kbps * 1000);
+  token_time = gst_util_uint64_scale (GST_SECOND, tokens, rtx->max_kbps * 1000);
 
   /* increment the time with how much we spent in terms of whole tokens */
   rtx->prev_time += token_time;
@@ -700,14 +745,11 @@ gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_FLUSH_START:
       gst_pad_push_event (rtx->srcpad, event);
-      gst_rtp_rtx_send_set_flushing (rtx, TRUE);
-      gst_pad_pause_task (rtx->srcpad);
+      gst_rtp_rtx_send_set_task_state (rtx, RTX_TASK_PAUSE);
       return TRUE;
     case GST_EVENT_FLUSH_STOP:
       gst_pad_push_event (rtx->srcpad, event);
-      gst_rtp_rtx_send_set_flushing (rtx, FALSE);
-      gst_pad_start_task (rtx->srcpad,
-          (GstTaskFunction) gst_rtp_rtx_send_src_loop, rtx, NULL);
+      gst_rtp_rtx_send_set_task_state (rtx, RTX_TASK_START);
       return TRUE;
     case GST_EVENT_EOS:
       GST_INFO_OBJECT (rtx, "Got EOS - enqueueing it");
@@ -926,7 +968,7 @@ gst_rtp_rtx_send_src_loop (GstRtpRtxSend * rtx)
     data->destroy (data);
   } else {
     GST_LOG_OBJECT (rtx, "flushing");
-    gst_pad_pause_task (rtx->srcpad);
+    gst_rtp_rtx_send_set_task_state (rtx, RTX_TASK_PAUSE);
   }
 }
 
@@ -940,12 +982,9 @@ gst_rtp_rtx_send_activate_mode (GstPad * pad, GstObject * parent,
   switch (mode) {
     case GST_PAD_MODE_PUSH:
       if (active) {
-        gst_rtp_rtx_send_set_flushing (rtx, FALSE);
-        ret = gst_pad_start_task (rtx->srcpad,
-            (GstTaskFunction) gst_rtp_rtx_send_src_loop, rtx, NULL);
+        ret = gst_rtp_rtx_send_set_task_state (rtx, RTX_TASK_START);
       } else {
-        gst_rtp_rtx_send_set_flushing (rtx, TRUE);
-        ret = gst_pad_stop_task (rtx->srcpad);
+        ret = gst_rtp_rtx_send_set_task_state (rtx, RTX_TASK_STOP);
       }
       GST_INFO_OBJECT (rtx, "activate_mode: active %d, ret %d", active, ret);
       break;
@@ -1064,6 +1103,12 @@ gst_rtp_rtx_send_set_property (GObject * object,
       gst_structure_foreach (rtx->rtx_pt_map_structure, structure_to_hash_table,
           rtx->rtx_pt_map);
       GST_OBJECT_UNLOCK (rtx);
+
+      if (IS_RTX_ENABLED (rtx))
+        gst_rtp_rtx_send_set_task_state (rtx, RTX_TASK_START);
+      else
+        gst_rtp_rtx_send_set_task_state (rtx, RTX_TASK_STOP);
+
       break;
     case PROP_MAX_SIZE_TIME:
       GST_OBJECT_LOCK (rtx);
