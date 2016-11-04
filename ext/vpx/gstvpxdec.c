@@ -40,6 +40,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_vpxdec_debug);
 #define DEFAULT_DEBLOCKING_LEVEL 4
 #define DEFAULT_NOISE_LEVEL 0
 #define DEFAULT_THREADS 0
+#define DEFAULT_DIRECT_RENDERING TRUE
 #define DEFAULT_VIDEO_CODEC_TAG NULL
 #define DEFAULT_CODEC_ALGO NULL
 
@@ -50,7 +51,8 @@ enum
   PROP_POST_PROCESSING_FLAGS,
   PROP_DEBLOCKING_LEVEL,
   PROP_NOISE_LEVEL,
-  PROP_THREADS
+  PROP_THREADS,
+  PROP_DIRECT_RENDERING
 };
 
 #define C_FLAGS(v) ((guint) v)
@@ -153,6 +155,11 @@ gst_vpx_dec_class_init (GstVPXDecClass * klass)
           "Maximum number of decoding threads",
           0, 16, DEFAULT_THREADS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_DIRECT_RENDERING,
+      g_param_spec_boolean ("direct-rendering", "Direct Rendering",
+          "Enable direct rendering", DEFAULT_DIRECT_RENDERING,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   base_video_decoder_class->start = GST_DEBUG_FUNCPTR (gst_vpx_dec_start);
   base_video_decoder_class->stop = GST_DEBUG_FUNCPTR (gst_vpx_dec_stop);
   base_video_decoder_class->flush = GST_DEBUG_FUNCPTR (gst_vpx_dec_flush);
@@ -187,6 +194,7 @@ gst_vpx_dec_init (GstVPXDec * gst_vpx_dec)
   gst_vpx_dec->post_processing_flags = DEFAULT_POST_PROCESSING_FLAGS;
   gst_vpx_dec->deblocking_level = DEFAULT_DEBLOCKING_LEVEL;
   gst_vpx_dec->noise_level = DEFAULT_NOISE_LEVEL;
+  gst_vpx_dec->direct_rendering = DEFAULT_DIRECT_RENDERING;
 
   gst_video_decoder_set_needs_format (decoder, TRUE);
   gst_video_decoder_set_use_default_pad_acceptcaps (decoder, TRUE);
@@ -219,6 +227,9 @@ gst_vpx_dec_set_property (GObject * object, guint prop_id,
     case PROP_THREADS:
       dec->threads = g_value_get_uint (value);
       break;
+    case PROP_DIRECT_RENDERING:
+      dec->direct_rendering = g_value_get_boolean (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -249,6 +260,9 @@ gst_vpx_dec_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_THREADS:
       g_value_set_uint (value, dec->threads);
+      break;
+    case PROP_DIRECT_RENDERING:
+      g_value_set_boolean (value, dec->direct_rendering);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -619,8 +633,10 @@ gst_vpx_dec_open_codec (GstVPXDec * dec, GstVideoCodecFrame * frame)
     }
   }
 #ifdef HAVE_VPX_1_4
-  vpx_codec_set_frame_buffer_functions (&dec->decoder,
-      gst_vpx_dec_get_buffer_cb, gst_vpx_dec_release_buffer_cb, dec);
+  if (dec->direct_rendering) {
+    vpx_codec_set_frame_buffer_functions (&dec->decoder,
+        gst_vpx_dec_get_buffer_cb, gst_vpx_dec_release_buffer_cb, dec);
+  }
 #endif
 
   dec->decoder_inited = TRUE;
@@ -703,7 +719,7 @@ gst_vpx_dec_handle_frame (GstVideoDecoder * decoder, GstVideoCodecFrame * frame)
     } else {
       gst_vpx_dec_handle_resolution_change (dec, img, fmt);
 #ifdef HAVE_VPX_1_4
-      if (img->fb_priv && dec->have_video_meta) {
+      if (dec->direct_rendering && img->fb_priv && dec->have_video_meta) {
         frame->output_buffer = gst_vpx_dec_prepare_image (dec, img);
         ret = gst_video_decoder_finish_frame (decoder, frame);
       } else
