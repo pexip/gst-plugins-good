@@ -197,18 +197,20 @@ gst_rtp_L16_depay_setcaps (GstRTPBaseDepayload * depayload, GstCaps * caps)
   /* add channel positions */
   channel_order = gst_structure_get_string (structure, "channel-order");
 
-  order = gst_rtp_channels_get_by_order (channels, channel_order);
-  rtpL16depay->order = order;
-  if (order) {
-    memcpy (info->position, order->pos,
-        sizeof (GstAudioChannelPosition) * channels);
-    gst_audio_channel_positions_to_valid_order (info->position, info->channels);
-  } else {
-    GST_ELEMENT_WARNING (rtpL16depay, STREAM, DECODE,
-        (NULL), ("Unknown channel order '%s' for %d channels",
-            GST_STR_NULL (channel_order), channels));
-    /* create default NONE layout */
-    gst_rtp_channels_create_default (channels, info->position);
+  if (channel_order) {
+    order = gst_rtp_channels_get_by_order (channels, channel_order);
+    rtpL16depay->order = order;
+    if (order) {
+      memcpy (info->position, order->pos,
+          sizeof (GstAudioChannelPosition) * channels);
+      gst_audio_channel_positions_to_valid_order (info->position, info->channels);
+    } else {
+      GST_ELEMENT_WARNING (rtpL16depay, STREAM, DECODE,
+          (NULL), ("Unknown channel order '%s' for %d channels",
+              GST_STR_NULL (channel_order), channels));
+      /* create default NONE layout */
+      gst_rtp_channels_create_default (channels, info->position);
+    }
   }
 
   srccaps = gst_audio_info_to_caps (info);
