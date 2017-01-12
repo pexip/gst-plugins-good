@@ -708,11 +708,10 @@ gst_rtp_ssrc_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   /* ERRORS */
 invalid_payload:
   {
-    /* this is fatal and should be filtered earlier */
     GST_ELEMENT_ERROR (demux, STREAM, DECODE, (NULL),
         ("Dropping invalid RTP payload"));
     gst_buffer_unref (buf);
-    return GST_FLOW_ERROR;
+    return GST_FLOW_OK;
   }
 create_failed:
   {
@@ -798,11 +797,10 @@ gst_rtp_ssrc_demux_rtcp_chain (GstPad * pad, GstObject * parent,
   /* ERRORS */
 invalid_rtcp:
   {
-    /* this is fatal and should be filtered earlier */
     GST_ELEMENT_ERROR (demux, STREAM, DECODE, (NULL),
         ("Dropping invalid RTCP packet"));
     gst_buffer_unref (buf);
-    return GST_FLOW_ERROR;
+    return GST_FLOW_OK;
   }
 unexpected_rtcp:
   {
