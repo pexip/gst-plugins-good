@@ -3410,6 +3410,7 @@ session_maybe_create_bundle_demuxer (GstRtpBinSession * session)
     session->bundle_demux = gst_element_factory_make ("rtpssrcdemux", NULL);
     session->bundle_demux_newpad_sig = g_signal_connect (session->bundle_demux,
         "new-ssrc-pad", (GCallback) new_bundled_ssrc_pad_found, session);
+    g_object_set (session->bundle_demux, "max-streams", rtpbin->max_streams, NULL);
 
     gst_bin_add (GST_BIN_CAST (rtpbin), session->bundle_demux);
     gst_element_sync_state_with_parent (session->bundle_demux);
