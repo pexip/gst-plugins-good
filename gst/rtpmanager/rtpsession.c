@@ -1812,8 +1812,11 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
   }
   /* update last activity */
   source->last_activity = pinfo->current_time;
-  if (rtp)
+  if (rtp) {
     source->last_rtp_activity = pinfo->current_time;
+    if (source->first_rtp_activity == GST_CLOCK_TIME_NONE)
+      source->first_rtp_activity = pinfo->current_time;
+  }
   g_object_ref (source);
 
   return source;
@@ -1849,6 +1852,8 @@ obtain_internal_source (RTPSession * sess, guint32 ssrc, gboolean * created,
   if (current_time != GST_CLOCK_TIME_NONE) {
     source->last_activity = current_time;
     source->last_rtp_activity = current_time;
+    if (source->first_rtp_activity == GST_CLOCK_TIME_NONE)
+      source->first_rtp_activity = current_time;
   }
   g_object_ref (source);
 
