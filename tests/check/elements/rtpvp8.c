@@ -30,275 +30,193 @@ static guint8 intra_picid6336_seqnum0[] = {
   0x90, 0x80, 0x98, 0xc0, 0xf0, 0x07, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00,
   0x90, 0x00, 0x06, 0x47, 0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21,
 };
-
-static guint8 inter_picid6337_seqnum2[] = {
-  0x80, 0xe0, 0x00, 0x02, 0xe9, 0x30, 0xa3, 0x66, 0x8b, 0xe9, 0x1d, 0x61,
-  0x90, 0x80, 0x98, 0xc1, 0x31, 0x02, 0x00, 0x19, 0x11, 0xbc, 0x00, 0x18,
-  0x00, 0x18, 0x58, 0x2f, 0xf4, 0x00, 0x08, 0x80, 0x43, 0x98, 0x06, 0x00,
-};
-
 static guint8 intra_picid24_seqnum0[] = {
   0x80, 0xe0, 0x00, 0x00, 0x9a, 0xbb, 0xe3, 0xb3, 0x8b, 0xe9, 0x1d, 0x61,
   0x90, 0x80, 0x18, 0xf0, 0x07, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00,
   0x90, 0x00, 0x06, 0x47, 0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21,
 };
-
-static guint8 inter_picid25_seqnum2[] = {
-  0x80, 0xe0, 0x00, 0x02, 0xe9, 0x30, 0xa3, 0x66, 0x8b, 0xe9, 0x1d, 0x61,
-  0x90, 0x80, 0x19, 0x31, 0x02, 0x00, 0x19, 0x11, 0xbc, 0x00, 0x18,
-  0x00, 0x18, 0x58, 0x2f, 0xf4, 0x00, 0x08, 0x80, 0x43, 0x98, 0x06, 0x00,
-};
-
 static guint8 intra_nopicid_seqnum0[] = {
   0x80, 0xe0, 0x00, 0x00, 0x9a, 0xbb, 0xe3, 0xb3, 0x8b, 0xe9, 0x1d, 0x61,
   0x90, 0x00, 0xf0, 0x07, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00,
   0x90, 0x00, 0x06, 0x47, 0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21,
 };
 
-static guint8 inter_nopicid_seqnum2[] = {
-  0x80, 0xe0, 0x00, 0x02, 0xe9, 0x30, 0xa3, 0x66, 0x8b, 0xe9, 0x1d, 0x61,
-  0x90, 0x00, 0x31, 0x02, 0x00, 0x19, 0x11, 0xbc, 0x00, 0x18,
-  0x00, 0x18, 0x58, 0x2f, 0xf4, 0x00, 0x08, 0x80, 0x43, 0x98, 0x06, 0x00,
-};
-
-typedef struct _stop_gap_events_test_data_t
+static GstBuffer *
+create_rtp_vp8_buffer (guint seqnum, guint picid, gint picid_bits,
+    GstClockTime buf_pts)
 {
-  guint8 *buf;
-  gsize bufsize;
-} stop_gap_events_test_data_t;
+  GstBuffer *ret;
+  guint8 *packet;
+  gsize size;
 
-stop_gap_events_test_data_t test_data_no_gap_in_picid[2][2] = {
-  // Pictureid without M bit
-  {
-        {intra_picid24_seqnum0, sizeof (intra_picid24_seqnum0)}
-        ,
-        {inter_picid25_seqnum2, sizeof (inter_picid25_seqnum2)}
-      }
-  ,
-  // Pictureid with M bit
-  {
-        {intra_picid6336_seqnum0, sizeof (intra_picid6336_seqnum0)}
-        ,
-        {inter_picid6337_seqnum2, sizeof (inter_picid6337_seqnum2)}
-      }
-  ,
-};
+  g_assert (picid_bits == 0 || picid_bits == 7 || picid_bits == 15);
 
-stop_gap_events_test_data_t test_data_nopicid[3][2] = {
-  {
-        {intra_picid24_seqnum0, sizeof (intra_picid24_seqnum0)}
-        ,
-        {inter_nopicid_seqnum2, sizeof (inter_nopicid_seqnum2)}
-      }
-  ,
-  {
-        {intra_nopicid_seqnum0, sizeof (intra_nopicid_seqnum0)}
-        ,
-        {inter_picid25_seqnum2, sizeof (inter_picid25_seqnum2)}
-      }
-  ,
-  {
-        {intra_nopicid_seqnum0, sizeof (intra_nopicid_seqnum0)}
-        ,
-        {inter_nopicid_seqnum2, sizeof (inter_nopicid_seqnum2)}
-      }
-  ,
-};
+  if (picid_bits == 0) {
+    size = sizeof (intra_nopicid_seqnum0);
+    packet = g_memdup (intra_nopicid_seqnum0, size);
+  } else if (picid_bits == 7) {
+    size = sizeof (intra_picid24_seqnum0);
+    packet = g_memdup (intra_picid24_seqnum0, size);
+    packet[14] = picid & 0x7f;
+  } else {
+    size = sizeof (intra_picid6336_seqnum0);
+    packet = g_memdup (intra_picid6336_seqnum0, size);
+    packet[14] = ((picid >> 8) & 0xff) | 0x80;
+    packet[15] = (picid >> 0) & 0xff;
+  }
+
+  packet[2] = (seqnum >> 8) & 0xff;
+  packet[3] = (seqnum >> 0) & 0xff;
+
+  ret = gst_buffer_new_wrapped (packet, size);
+  GST_BUFFER_PTS (ret) = buf_pts;
+  return ret;
+}
+
+typedef struct _DepayGapEventTestData
+{
+  gint seq_num;
+  gint picid;
+  gint picid_bits;
+} DepayGapEventTestData;
 
 static void
-test_depay_stop_gap_events_base (stop_gap_events_test_data_t * test_data)
+test_depay_gap_event_base (const DepayGapEventTestData *data,
+    gboolean send_lost_event, gboolean expect_gap_event)
 {
   GstEvent *event;
+  GstClockTime pts = 0;
   GstHarness *h = gst_harness_new ("rtpvp8depay");
   gst_harness_set_src_caps_str (h, RTP_VP8_CAPS_STR);
 
-  // The fist buffer has seq_num = 0
-  gst_harness_push (h, gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-          test_data[0].buf, test_data[0].bufsize, 0, test_data[0].bufsize, NULL,
-          NULL));
+  gst_harness_push (h, create_rtp_vp8_buffer (data[0].seq_num, data[0].picid, data[0].picid_bits, pts));
+  pts += 33 * GST_MSECOND;
 
   // Preparation before pushing gap event. Getting rid of all events which
   // came by this point - segment, caps, etc
-  while ((event = gst_harness_try_pull_event (h)) != NULL)
-    gst_event_unref (event);
-
-  // The buffer with sequence number = 0x1 is lost, it does not introduce
-  // gaps in pictureids like if it was a FEC packet
-  gst_harness_push_event (h, gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
-          gst_structure_new ("GstRTPPacketLost",
-              "seqnum", G_TYPE_UINT, (guint) 1,
-              "timestamp", G_TYPE_UINT64, 33 * GST_MSECOND,
-              "duration", G_TYPE_UINT64, 33 * GST_MSECOND, NULL)));
-
-  // Making shure the GAP event was not pushed downstream
+  for (gint i = 0; i < 3; i++)
+    gst_event_unref (gst_harness_pull_event (h));
   fail_unless_equals_int (gst_harness_events_in_queue (h), 0);
 
-  // The next buffer seq_num = 2
-  gst_harness_push (h, gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-          test_data[1].buf, test_data[1].bufsize, 0, test_data[1].bufsize, NULL,
-          NULL));
+  if (send_lost_event) {
+    gst_harness_push_event (h, gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
+        gst_structure_new ("GstRTPPacketLost",
+            "timestamp", G_TYPE_UINT64, pts,
+            "duration", G_TYPE_UINT64, 33*GST_MSECOND, NULL)));
+    pts += 33 * GST_MSECOND;
+  }
+
+  gst_harness_push (h, create_rtp_vp8_buffer (data[1].seq_num, data[1].picid, data[1].picid_bits, pts));
   fail_unless_equals_int (2, gst_harness_buffers_received (h));
 
-  // Making shure the GAP event was not pushed downstream
+  if (expect_gap_event) {
+    // Making shure the GAP event was pushed downstream
+    event = gst_harness_pull_event (h);
+    fail_unless_equals_string ("gap", gst_event_type_get_name (GST_EVENT_TYPE (event)));
+    gst_event_unref (event);
+  }
   fail_unless_equals_int (gst_harness_events_in_queue (h), 0);
+
   gst_harness_teardown (h);
 }
+
+// Packet loss + no loss in picture ids
+static const DepayGapEventTestData stop_gap_events_test_data[][2] = {
+  // 7bit picture ids
+  {{100, 24, 7}, {102, 25, 7}},
+
+  // 15bit picture ids
+  {{100, 250, 15}, {102, 251, 15}},
+
+  // 7bit picture ids wrap
+  {{100, 127, 7}, {102, 0, 7}},
+
+  // 15bit picture ids wrap
+  {{100, 32767, 15}, {102, 0, 15}},
+
+  // 7bit to 15bit picture id
+  {{100, 127, 7}, {102, 128, 15}},
+};
 
 GST_START_TEST (test_depay_stop_gap_events)
 {
-  test_depay_stop_gap_events_base (&test_data_no_gap_in_picid[__i__][0]);
+  test_depay_gap_event_base (&stop_gap_events_test_data[__i__][0], TRUE, FALSE);
 }
-
 GST_END_TEST;
 
-GST_START_TEST (test_depay_stop_gap_events_pictureid_wraps)
+// Packet loss + lost picture ids
+static const DepayGapEventTestData resend_gap_event_test_data[][2] = {
+  // 7bit picture ids
+  {{100, 24, 7}, {102, 26, 7}},
+
+  // 15bit picture ids
+  {{100, 250, 15}, {102, 252, 15}},
+
+  // 7bit picture ids wrap
+  {{100, 127, 7}, {102, 1, 7}},
+
+  // 15bit picture ids wrap
+  {{100, 32767, 15}, {102, 1, 15}},
+
+  // 7bit to 15bit picture id
+  {{100, 126, 7}, {102, 129, 15}},
+};
+
+GST_START_TEST (test_depay_resend_gap_event)
 {
-  gboolean mbit = __i__ != 0;
-  guint8 *intra =
-      g_memdup (test_data_no_gap_in_picid[mbit][0].buf,
-      test_data_no_gap_in_picid[mbit][0].bufsize);
-  guint8 *inter =
-      g_memdup (test_data_no_gap_in_picid[mbit][1].buf,
-      test_data_no_gap_in_picid[mbit][1].bufsize);
-  stop_gap_events_test_data_t test_data[2] = {
-    {intra, test_data_no_gap_in_picid[mbit][0].bufsize}
-    ,
-    {inter, test_data_no_gap_in_picid[mbit][1].bufsize}
-  };
-
-  if (mbit) {
-    intra[14] = 0xff;           // Mbit=1 + 0x7fff pictureid
-    intra[15] = 0xff;
-    inter[14] = 0x80;           // Mbit=1 + 0x000 pictureid
-    inter[15] = 0x00;
-  } else {
-    intra[14] = 0x7f;           // Mbit=0 + 0x7f pictureid
-    inter[14] = 0x00;           // Mbit=0 + 0x00 pictureid
-  }
-  test_depay_stop_gap_events_base (&test_data[0]);
-  g_free (intra);
-  g_free (inter);
+  test_depay_gap_event_base (&resend_gap_event_test_data[__i__][0], TRUE, TRUE);
 }
-
 GST_END_TEST;
 
-GST_START_TEST (test_depay_stop_gap_events_extend_pictureid_bitwidth)
+// Packet loss + one of picture ids does not exist
+static const DepayGapEventTestData resend_gap_event_nopicid_test_data[][2] = {
+  {{100, 24, 7}, {102, 0, 0}},
+  {{100, 0, 0}, {102, 26, 7}},
+  {{100, 0, 0}, {102, 0, 0}},
+};
+
+GST_START_TEST (test_depay_resend_gap_event_nopicid)
 {
-  guint8 *intra =
-      g_memdup (intra_picid24_seqnum0, sizeof (intra_picid24_seqnum0));
-  guint8 *inter =
-      g_memdup (inter_picid6337_seqnum2, sizeof (inter_picid6337_seqnum2));
-  stop_gap_events_test_data_t test_data[2] = {
-    {intra, sizeof (intra_picid24_seqnum0)}
-    ,
-    {inter, sizeof (inter_picid6337_seqnum2)}
-  };
-
-  // Overriding picture id, so that intra picutre id = 127 and inter = 128
-  intra[14] = 0x7f;             // intra has Mbit = 0
-  inter[14] = 0x80;             // inter has Mbit = 1
-  inter[15] = 0x80;             // 0x7f + 1 = 0x80
-  test_depay_stop_gap_events_base (&test_data[0]);
-  g_free (intra);
-  g_free (inter);
+  test_depay_gap_event_base (&resend_gap_event_nopicid_test_data[__i__][0], TRUE, TRUE);
 }
-
 GST_END_TEST;
 
-static void
-test_depay_resend_gap_events_base (stop_gap_events_test_data_t * test_data)
+// No packet loss + lost picture ids
+static const DepayGapEventTestData create_gap_event_on_picid_gaps_test_data[][2] = {
+  // 7bit picture ids
+  {{100, 24, 7}, {101, 26, 7}},
+
+  // 15bit picture ids
+  {{100, 250, 15}, {101, 252, 15}},
+
+  // 7bit picture ids wrap
+  {{100, 127, 7}, {101, 1, 7}},
+
+  // 15bit picture ids wrap
+  {{100, 32767, 15}, {101, 1, 15}},
+
+  // 7bit to 15bit picture id
+  {{100, 126, 7}, {101, 129, 15}},
+};
+
+GST_START_TEST (test_depay_create_gap_event_on_picid_gaps)
 {
-  GstEvent *event;
-  GstHarness *h = gst_harness_new ("rtpvp8depay");
-  gst_harness_set_src_caps_str (h, RTP_VP8_CAPS_STR);
-
-  // The fist buffer has seq_num = 0
-  gst_harness_push (h, gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-          test_data[0].buf, test_data[0].bufsize, 0, test_data[0].bufsize, NULL,
-          NULL));
-
-  // Preparation before pushing gap event. Getting rid of all events which
-  // came by this point - segment, caps, etc
-  while ((event = gst_harness_try_pull_event (h)) != NULL)
-    gst_event_unref (event);
-
-  // The buffer with sequence number = 0x1 is lost, but this time
-  // the lost buffer is a frame, that's why there is a gap in pictureid's
-  gst_harness_push_event (h, gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
-          gst_structure_new ("GstRTPPacketLost",
-              "seqnum", G_TYPE_UINT, (guint) 1,
-              "timestamp", G_TYPE_UINT64, 33 * GST_MSECOND,
-              "duration", G_TYPE_UINT64, 33 * GST_MSECOND, NULL)));
-
-  // The next buffer seq_num = 2
-  gst_harness_push (h, gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-          test_data[1].buf, test_data[1].bufsize, 0, test_data[1].bufsize, NULL,
-          NULL));
-  fail_unless_equals_int (2, gst_harness_buffers_received (h));
-
-  // Making shure the GAP event was pushed downstream
-  fail_unless_equals_int (gst_harness_events_in_queue (h), 1);
-  gst_harness_teardown (h);
+  test_depay_gap_event_base (&create_gap_event_on_picid_gaps_test_data[__i__][0], FALSE, TRUE);
 }
-
-GST_START_TEST (test_depay_resend_gap_events)
-{
-  gboolean mbit = __i__ != 0;
-  guint8 *intra =
-      g_memdup (test_data_no_gap_in_picid[mbit][0].buf,
-      test_data_no_gap_in_picid[mbit][0].bufsize);
-  guint8 *inter =
-      g_memdup (test_data_no_gap_in_picid[mbit][1].buf,
-      test_data_no_gap_in_picid[mbit][1].bufsize);
-  stop_gap_events_test_data_t test_data[2] = {
-    {intra, test_data_no_gap_in_picid[mbit][0].bufsize}
-    ,
-    {inter, test_data_no_gap_in_picid[mbit][1].bufsize}
-  };
-
-  // Introducing a gap in the picture id in the test data
-  if (mbit) {
-    inter[15] += 1;
-  } else {
-    inter[14] += 1;
-  }
-  test_depay_resend_gap_events_base (&test_data[0]);
-  g_free (intra);
-  g_free (inter);
-}
-
 GST_END_TEST;
 
-GST_START_TEST (test_depay_resend_gap_events_extend_pictureid_bitwidth)
+// No packet loss + one of picture ids does not exist
+static const DepayGapEventTestData nopicid_test_data[][2] = {
+  {{100, 24, 7}, {101, 0, 0}},
+  {{100, 0, 0}, {101, 26, 7}},
+  {{100, 0, 0}, {101, 0, 0}},
+};
+
+GST_START_TEST (test_depay_nopicid)
 {
-  guint8 *intra =
-      g_memdup (intra_picid24_seqnum0, sizeof (intra_picid24_seqnum0));
-  guint8 *inter =
-      g_memdup (inter_picid6337_seqnum2, sizeof (inter_picid6337_seqnum2));
-  stop_gap_events_test_data_t test_data[2] = {
-    {intra, sizeof (intra_picid24_seqnum0)}
-    ,
-    {inter_nopicid_seqnum2, sizeof (inter_nopicid_seqnum2)}
-  };
-
-  // Overriding picture id, so that intra picutre id = 127 and inter = 129
-  intra[14] = 0x7f;             // intra has Mbit = 0
-  inter[14] = 0x80;             // inter has Mbit = 1
-  inter[15] = 0x81;             // 0x7f + 2 = 0x81
-  test_depay_resend_gap_events_base (&test_data[0]);
-  g_free (intra);
-  g_free (inter);
+  test_depay_gap_event_base (&nopicid_test_data[__i__][0], FALSE, FALSE);
 }
-
 GST_END_TEST;
-
-GST_START_TEST (test_depay_resend_gap_events_nopicid)
-{
-  test_depay_resend_gap_events_base (&test_data_nopicid[__i__][0]);
-}
-
-GST_END_TEST;
-
 
 static Suite *
 rtpvp8_suite (void)
@@ -307,18 +225,11 @@ rtpvp8_suite (void)
   TCase *tc_chain;
 
   suite_add_tcase (s, (tc_chain = tcase_create ("vp8depay")));
-  tcase_add_loop_test (tc_chain, test_depay_stop_gap_events, 0,
-      G_N_ELEMENTS (test_data_no_gap_in_picid));
-  tcase_add_loop_test (tc_chain, test_depay_stop_gap_events_pictureid_wraps, 0,
-      G_N_ELEMENTS (test_data_no_gap_in_picid));
-  tcase_add_test (tc_chain,
-      test_depay_stop_gap_events_extend_pictureid_bitwidth);
-  tcase_add_loop_test (tc_chain, test_depay_resend_gap_events, 0,
-      G_N_ELEMENTS (test_data_no_gap_in_picid));
-  tcase_add_test (tc_chain,
-      test_depay_resend_gap_events_extend_pictureid_bitwidth);
-  tcase_add_loop_test (tc_chain, test_depay_resend_gap_events_nopicid, 0,
-      G_N_ELEMENTS (test_data_nopicid));
+  tcase_add_loop_test (tc_chain, test_depay_stop_gap_events, 0, G_N_ELEMENTS (stop_gap_events_test_data));
+  tcase_add_loop_test (tc_chain, test_depay_resend_gap_event, 0, G_N_ELEMENTS (resend_gap_event_test_data));
+  tcase_add_loop_test (tc_chain, test_depay_resend_gap_event_nopicid, 0, G_N_ELEMENTS (resend_gap_event_nopicid_test_data));
+  tcase_add_loop_test (tc_chain, test_depay_create_gap_event_on_picid_gaps, 0, G_N_ELEMENTS (create_gap_event_on_picid_gaps_test_data));
+  tcase_add_loop_test (tc_chain, test_depay_nopicid, 0, G_N_ELEMENTS (nopicid_test_data));
 
   return s;
 }
