@@ -73,7 +73,6 @@ enum
 
 #define PICTURE_ID_NONE (UINT_MAX)
 #define IS_PICTURE_ID_15BITS(pid) (((guint)(pid) & 0x8000) != 0)
-#define PICTURE_ID_WITHOUT_MBIT(pid) ((pid) & 0x7fff)
 
 static void
 gst_rtp_vp8_depay_init (GstRtpVP8Depay * self)
@@ -168,33 +167,13 @@ gst_rtp_vp8_depay_get_property (GObject * object, guint prop_id,
   }
 }
 
-static guint
-inc_picture_id (guint picture_id, guint new_picture_id)
+static gint
+picture_id_compare (guint16 id0, guint16 id1)
 {
-  gboolean is_picture_id_15bits = IS_PICTURE_ID_15BITS (picture_id);
-
-  // Getting rid of M bit, and incrementing picture_id
-  picture_id = PICTURE_ID_WITHOUT_MBIT (picture_id);
-  if (is_picture_id_15bits) {
-    picture_id += 1;
-  } else {
-    picture_id = (picture_id >> 8) + 1;
-  }
-
-  // Handling counter wraping and brining back M-bit
-  if (IS_PICTURE_ID_15BITS (new_picture_id)) {
-    if (picture_id > 0x7fff) {
-      picture_id = 0;
-    }
-    picture_id |= 0x8000;
-  } else {
-    if (picture_id > 0x7f) {
-      picture_id = 0;
-    }
-    picture_id = picture_id << 8;
-  }
-
-  return picture_id;
+  guint shift = 16 - (IS_PICTURE_ID_15BITS (id1) ? 15 : 7);
+  id0 = id0 << shift;
+  id1 = id1 << shift;
+  return ((gint16)(id1 - id0)) >> shift;
 }
 
 static void
@@ -213,40 +192,63 @@ send_last_lost_event (GstRtpVP8Depay * self)
 }
 
 static void
-send_last_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id)
+send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
+    GstClockTime lost_event_timestamp)
 {
-  g_assert_cmpint (self->last_picture_id, !=, PICTURE_ID_NONE);
+  const gchar *reason = NULL;
+  gboolean fwd_last_lost_event = FALSE;
+  gboolean create_lost_event = FALSE;
+
+  if (self->last_picture_id == PICTURE_ID_NONE)
+    return;
+
+  if (new_picture_id == PICTURE_ID_NONE) {
+    reason = "picture id does not exist";
+    fwd_last_lost_event = TRUE;
+  } else if (IS_PICTURE_ID_15BITS (self->last_picture_id) &&
+      !IS_PICTURE_ID_15BITS (new_picture_id)) {
+    reason = "picture id has less bits than before";
+    fwd_last_lost_event = TRUE;
+  } else if (picture_id_compare (self->last_picture_id, new_picture_id) != 1) {
+    reason = "picture id gap";
+    fwd_last_lost_event = TRUE;
+    create_lost_event = TRUE;
+  }
 
   if (self->last_lost_event) {
-    gboolean send_lost_event = FALSE;
-    if (new_picture_id == PICTURE_ID_NONE) {
-      GST_DEBUG_OBJECT (self, "Sending the last stopped lost event "
-          "(picture id does not exist): %" GST_PTR_FORMAT,
-          self->last_lost_event);
-      send_lost_event = TRUE;
-    } else if (IS_PICTURE_ID_15BITS (self->last_picture_id) &&
-        !IS_PICTURE_ID_15BITS (new_picture_id)) {
-      GST_DEBUG_OBJECT (self, "Sending the last stopped lost event "
-          "(picture id has less bits than before): %" GST_PTR_FORMAT,
-          self->last_lost_event);
-      send_lost_event = TRUE;
-    } else {
-      guint next_picture_id =
-          inc_picture_id (self->last_picture_id, new_picture_id);
-      if (new_picture_id != next_picture_id) {
-        GST_DEBUG_OBJECT (self, "Sending the last stopped lost event "
-            "(gap in picture id %u %u): %" GST_PTR_FORMAT,
-            self->last_picture_id, new_picture_id, self->last_lost_event);
-        send_lost_event = TRUE;
-      }
-    }
-    if (send_lost_event)
+    if (fwd_last_lost_event) {
+      GST_DEBUG_OBJECT (self, "Forwarding lost event "
+          "(picids 0x%x 0x%x, reason \"%s\"): %"GST_PTR_FORMAT,
+          self->last_picture_id, new_picture_id, reason, self->last_lost_event);
       GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
           ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
           self->last_lost_event);
 
+      // If we forward last received lost event, there is no need
+      // to create another one
+      create_lost_event = FALSE;
+    }
     gst_event_unref (self->last_lost_event);
     self->last_lost_event = NULL;
+  }
+
+  if (create_lost_event) {
+    if (GST_CLOCK_TIME_IS_VALID (lost_event_timestamp)) {
+      GstEvent *lost_event = gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
+          gst_structure_new ("GstRTPPacketLost",
+              "timestamp", G_TYPE_UINT64, lost_event_timestamp,
+              "duration", G_TYPE_UINT64, 0, NULL));
+
+      GST_DEBUG_OBJECT (self, "Pushing lost event "
+          "(picids 0x%x 0x%x, reason \"%s\"): %"GST_PTR_FORMAT,
+          self->last_picture_id, new_picture_id, reason, lost_event);
+      GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
+          ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
+          lost_event);
+      gst_event_unref (lost_event);
+    } else {
+      GST_WARNING_OBJECT (self, "Can't create lost event with invalid timestmap");
+    }
   }
 }
 
@@ -283,12 +285,12 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
         goto too_small;
       hdrsize++;
       /* Check for 16 bits PictureID */
-      picture_id = data[2] << 8;
+      picture_id = data[2];
       if ((data[2] & 0x80) != 0) {
         if (G_UNLIKELY (size < 4))
           goto too_small;
         hdrsize++;
-        picture_id |= data[3];
+        picture_id = (picture_id << 8) | data[3];
       }
     }
     /* Check L optional header */
@@ -317,12 +319,10 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     }
 
     GST_DEBUG_OBJECT (depay, "Found the start of the frame");
-    self->started = TRUE;
+    send_lost_event_if_needed (self, picture_id, GST_BUFFER_PTS (rtp->buffer));
 
-    if (self->stop_lost_events) {
-      send_last_lost_event_if_needed (self, picture_id);
-      self->stop_lost_events = FALSE;
-    }
+    self->started = TRUE;
+    self->stop_lost_events = FALSE;
   }
 
   payload = gst_rtp_buffer_get_payload_subbuffer (rtp, hdrsize, -1);
