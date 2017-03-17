@@ -110,9 +110,16 @@ test_depay_gap_event_base (const DepayGapEventTestData *data,
   fail_unless_equals_int (2, gst_harness_buffers_received (h));
 
   if (expect_gap_event) {
+    gboolean noloss = FALSE;
+
     // Making shure the GAP event was pushed downstream
     event = gst_harness_pull_event (h);
     fail_unless_equals_string ("gap", gst_event_type_get_name (GST_EVENT_TYPE (event)));
+    gst_structure_get_boolean (gst_event_get_structure (event), "no-packet-loss", &noloss);
+
+    // If we didn't send GstRTPPacketLost event, the gap
+    // event should indicate that with 'no-packet-loss' parameter
+    fail_unless_equals_int (noloss, !send_lost_event);
     gst_event_unref (event);
   }
   fail_unless_equals_int (gst_harness_events_in_queue (h), 0);
