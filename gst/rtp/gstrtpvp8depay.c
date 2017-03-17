@@ -237,7 +237,8 @@ send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
       GstEvent *lost_event = gst_event_new_custom (GST_EVENT_CUSTOM_DOWNSTREAM,
           gst_structure_new ("GstRTPPacketLost",
               "timestamp", G_TYPE_UINT64, lost_event_timestamp,
-              "duration", G_TYPE_UINT64, 0, NULL));
+              "duration", G_TYPE_UINT64, 0,
+              "no-packet-loss", G_TYPE_BOOLEAN, TRUE, NULL));
 
       GST_DEBUG_OBJECT (self, "Pushing lost event "
           "(picids 0x%x 0x%x, reason \"%s\"): %"GST_PTR_FORMAT,
