@@ -82,6 +82,8 @@ struct _GstVPXEnc
   gint64 deadline;
 
   /* Controls */
+  unsigned int tile_columns;
+  unsigned int tile_rows;
   VPX_SCALING_MODE h_scaling_mode;
   VPX_SCALING_MODE v_scaling_mode;
   int cpu_used;

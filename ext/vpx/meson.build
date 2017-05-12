@@ -19,7 +19,7 @@ vpx_features = [
 vpx_dep = dependency('vpx', version : '>=1.3.0', required : false)
 
 if vpx_dep.found()
-  vpx_args = []
+  vpx_args = ['-DHAVE_VPX_1_3']
   foreach f : vpx_features
     header = f.get(0)
     codec_iface = f.get(1)
