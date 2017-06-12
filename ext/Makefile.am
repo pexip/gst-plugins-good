@@ -125,6 +125,10 @@ if USE_VPX_AVX2
 VPX_DIR=vpx
 endif
 
+if USE_VPX_AVX512
+VPX_DIR=vpx
+endif
+
 if USE_WAVPACK
 WAVPACK_DIR=wavpack
 else

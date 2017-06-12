@@ -60,6 +60,17 @@ libgstvpx_avx2_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 libgstvpx_avx2_la_LIBTOOLFLAGS = $(GST_PLUGIN_LIBTOOLFLAGS)
 endif
 
+if USE_VPX_AVX512
+pluginavx512_LTLIBRARIES = libgstvpx-avx512.la
+EXTRA_libgstvpx_avx512_la_DEPENDENCIES = \
+	$(prefix)/lib/libvpx-avx512.a
+libgstvpx_avx512_la_SOURCES = $(sources)
+libgstvpx_avx512_la_CFLAGS = $(cflags) $(VPX_AVX512_CFLAGS)
+libgstvpx_avx512_la_LIBADD = $(libadd) $(VPX_AVX512_LIBS)
+libgstvpx_avx512_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
+libgstvpx_avx512_la_LIBTOOLFLAGS =  $(GST_PLUGIN_LIBTOOLFLAGS)
+endif
+
 noinst_HEADERS = \
 	gstvpxdec.h \
 	gstvpxenc.h \
