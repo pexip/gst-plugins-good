@@ -288,7 +288,7 @@ AC_ARG_ENABLE([simd-symlink],
     [--enable-simd-symlink=SIMD],
     [create symlink to SIMD'ified plugins]),
   [AS_CASE(
-    [$enableval], [sse], [], [avx], [], [avx2], [],
+    [$enableval], [sse], [], [avx], [], [avx2], [], [avx512], [],
     [AC_MSG_ERROR([bad value "$enableval" for --enable-symlink-simd])])],
   [enable_simd_symlink=no])
 AC_MSG_RESULT([$enable_simd_symlink])
@@ -298,19 +298,23 @@ dnl set the plugindir for special SIMD plugins
 AS_AC_EXPAND(pluginsse_reldir, ../gstreamer-$GST_API_VERSION-sse)
 AS_AC_EXPAND(pluginavx_reldir, ../gstreamer-$GST_API_VERSION-avx)
 AS_AC_EXPAND(pluginavx2_reldir, ../gstreamer-$GST_API_VERSION-avx2)
+AS_AC_EXPAND(pluginavx512_reldir, ../gstreamer-$GST_API_VERSION-avx512)
 pluginssedir=${plugindir}/${pluginsse_reldir}
 pluginavxdir=${plugindir}/${pluginavx_reldir}
 pluginavx2dir=${plugindir}/${pluginavx2_reldir}
+pluginavx512dir=${plugindir}/${pluginavx512_reldir}
 
 dnl choose which SIMD plugin directory to symlink to from plugindir
 AS_IF(
   [test "x$enable_simd_symlink" = "xsse"],[simddir=${pluginsse_reldir}],
   [test "x$enable_simd_symlink" = "xavx"],[simddir=${pluginavx_reldir}],
   [test "x$enable_simd_symlink" = "xavx2"],[simddir=${pluginavx2_reldir}],
+  [test "x$enable_simd_symlink" = "xavx512"],[simddir=${pluginavx512_reldir}],
 )
 AC_SUBST(pluginssedir)
 AC_SUBST(pluginavxdir)
 AC_SUBST(pluginavx2dir)
+AC_SUBST(pluginavx512dir)
 AC_SUBST(simddir)
 
 dnl set release date/time
@@ -961,6 +965,31 @@ AG_GST_CHECK_FEATURE(VPX_AVX2, [vpx avx2], vpx-avx2, [
   ])
 ])
 
+translit(dnm, m, l) AM_CONDITIONAL(USE_VPX_AVX512, true)
+AG_GST_CHECK_FEATURE(VPX_AVX512, [vpx avx512], vpx-avx512, [
+  HAVE_VP8_AVX512=no
+  HAVE_VP9_AVX512=no
+  PKG_CHECK_MODULES(VPX_AVX512, vpx-avx512 >= 1.1.0, [
+    HAVE_VPX_AVX512="yes"
+    HAVE_VP8_AVX512="yes"
+    AC_DEFINE(HAVE_VP8_ENCODER, 1, [Defined if the VP8 encoder is available])
+    AC_DEFINE(HAVE_VP8_DECODER, 1, [Defined if the VP8 decoder is available])
+
+    PKG_CHECK_MODULES(VPX_AVX512_130, vpx-avx512 >= 1.3.0, [
+      HAVE_VP9_AVX512="yes"
+      AC_DEFINE(HAVE_VPX_1_3, 1, [Defined if the VPX library version is 1.3 or bigger])
+      AC_DEFINE(HAVE_VP9_ENCODER, 1, [Defined if the VP9 encoder is available])
+      AC_DEFINE(HAVE_VP9_DECODER, 1, [Defined if the VP9 decoder is available])
+    ], [true])
+
+    PKG_CHECK_MODULES(VPX_AVX512_140, vpx-avx512 >= 1.4.0, [
+      AC_DEFINE(HAVE_VPX_1_4, 1, [Defined if the VPX library version is 1.4 or bigger])
+    ], [true])
+  ], [
+    HAVE_VPX_AVX512="no"
+  ])
+])
+
 dnl *** wavpack ***
 translit(dnm, m, l) AM_CONDITIONAL(USE_WAVPACK, true)
 AG_GST_CHECK_FEATURE(WAVPACK, [wavpack plug-in], wavpack, [
@@ -1024,6 +1053,7 @@ AM_CONDITIONAL(USE_VPX, false)
 AM_CONDITIONAL(USE_VPX_SSE, false)
 AM_CONDITIONAL(USE_VPX_AVX, false)
 AM_CONDITIONAL(USE_VPX_AVX2, false)
+AM_CONDITIONAL(USE_VPX_AVX512, false)
 AM_CONDITIONAL(USE_WAVEFORM, false)
 AM_CONDITIONAL(USE_WAVPACK, false)
 AM_CONDITIONAL(USE_X, false)
