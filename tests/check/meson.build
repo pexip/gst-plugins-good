@@ -70,6 +70,7 @@ good_tests = [
   [ 'elements/rtpfunnel' ],
   [ 'elements/rtpjitterbuffer' ],
   [ 'elements/rtpmux' ],
+  [ 'elements/rtpptdemux' ],
   [ 'elements/rtprtx' ],
   [ 'elements/rtpsession' ],
   [ 'elements/rtpstorage', false, [],  ['../../gst/rtp/gstrtpstorage.c',
