@@ -77,6 +77,7 @@ good_tests = [
   [ 'elements/rtpcollision' ],
   [ 'elements/rtpjitterbuffer' ],
   [ 'elements/rtpmux' ],
+  [ 'elements/rtpptdemux' ],
   [ 'elements/rtprtx' ],
   [ 'elements/rtpsession' ],
   [ 'elements/rtpssrcdemux' ],
