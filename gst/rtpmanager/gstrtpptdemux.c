@@ -267,8 +267,13 @@ gst_rtp_pt_demux_get_caps (GstRtpPtDemux * rtpdemux, guint pt)
   g_value_unset (&args[1]);
   caps = g_value_dup_boxed (&ret);
   g_value_unset (&ret);
+
   if (caps == NULL) {
     caps = gst_pad_get_current_caps (rtpdemux->sink);
+  }
+  if (caps != NULL) {
+    caps = gst_caps_make_writable (caps);
+    gst_caps_set_simple (caps, "payload", G_TYPE_INT, pt, NULL);
   }
 
   GST_DEBUG_OBJECT (rtpdemux, "pt %d, got caps %" GST_PTR_FORMAT, pt, caps);
@@ -392,14 +397,11 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
     gst_pad_set_active (srcpad, TRUE);
 
-
     /* First push the stream-start event, it must always come first */
     gst_pad_push_event (srcpad,
         gst_pad_get_sticky_event (rtpdemux->sink, GST_EVENT_STREAM_START, 0));
 
     /* Then caps event is sent */
-    caps = gst_caps_make_writable (caps);
-    gst_caps_set_simple (caps, "payload", G_TYPE_INT, pt, NULL);
     gst_pad_set_caps (srcpad, caps);
     gst_caps_unref (caps);
 
@@ -432,8 +434,6 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
     clear_newcaps_for_pt (rtpdemux, pt);
 
-    caps = gst_caps_make_writable (caps);
-    gst_caps_set_simple (caps, "payload", G_TYPE_INT, pt, NULL);
     gst_pad_set_caps (srcpad, caps);
     gst_caps_unref (caps);
   }
