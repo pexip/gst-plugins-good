@@ -247,7 +247,9 @@ gst_rtp_pt_demux_finalize (GObject * object)
 static GstCaps *
 gst_rtp_pt_demux_get_caps (GstRtpPtDemux * rtpdemux, guint pt)
 {
-  GstCaps *caps;
+  guint32 ssrc = 0;
+  gboolean have_ssrc = FALSE;
+  GstCaps *caps, *sink_caps;
   GValue ret = { 0 };
   GValue args[2] = { {0}, {0} };
 
@@ -266,14 +268,22 @@ gst_rtp_pt_demux_get_caps (GstRtpPtDemux * rtpdemux, guint pt)
   g_value_unset (&args[0]);
   g_value_unset (&args[1]);
   caps = g_value_dup_boxed (&ret);
+  sink_caps = gst_pad_get_current_caps (rtpdemux->sink);
   g_value_unset (&ret);
 
   if (caps == NULL) {
-    caps = gst_pad_get_current_caps (rtpdemux->sink);
+    caps = sink_caps;
+  } else if (sink_caps) {
+    have_ssrc = gst_structure_get_uint (
+        gst_caps_get_structure (sink_caps, 0), "ssrc", &ssrc);
+    gst_caps_unref (sink_caps);
   }
+
   if (caps != NULL) {
     caps = gst_caps_make_writable (caps);
     gst_caps_set_simple (caps, "payload", G_TYPE_INT, pt, NULL);
+    if (have_ssrc)
+      gst_caps_set_simple (caps, "ssrc", G_TYPE_UINT, ssrc, NULL);
   }
 
   GST_DEBUG_OBJECT (rtpdemux, "pt %d, got caps %" GST_PTR_FORMAT, pt, caps);
