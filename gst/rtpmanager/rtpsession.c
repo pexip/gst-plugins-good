@@ -1775,7 +1775,7 @@ obtain_source (RTPSession * sess, guint32 ssrc, gboolean * created,
     /* make new Source in probation and insert */
     source = rtp_source_new (ssrc);
 
-    GST_INFO ("creating new source %08x %p", ssrc, source);
+    GST_DEBUG ("creating new source %08x %p", ssrc, source);
 
     /* for RTP packets we need to set the source in probation. Receiving RTCP
      * packets of an SSRC, on the other hand, is a strong indication that we
