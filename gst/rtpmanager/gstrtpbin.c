@@ -757,6 +757,24 @@ new_bundled_ssrc_pad_found (GstElement * element, guint ssrc, GstPad * pad,
   GST_RTP_BIN_DYN_UNLOCK (rtpbin);
 }
 
+static GstElement *
+rtpbin_element_factory_make (GstRtpBin * rtpbin, const gchar * factory_name)
+{
+  GstElement *element;
+  gchar *name;
+
+  element = gst_element_factory_make (factory_name, NULL);
+  if (!element)
+    return NULL;
+
+  name = g_strdup_printf ("%s/%s", GST_ELEMENT_NAME (element),
+      GST_ELEMENT_NAME (rtpbin));
+  gst_object_set_name (GST_OBJECT_CAST (element), name);
+  g_free (name);
+
+  return element;
+}
+
 /* create a session with the given id.  Must be called with RTP_BIN_LOCK */
 static GstRtpBinSession *
 create_session (GstRtpBin * rtpbin, gint id)
@@ -765,10 +783,10 @@ create_session (GstRtpBin * rtpbin, gint id)
   GstElement *session, *demux;
   GstState target;
 
-  if (!(session = gst_element_factory_make ("rtpsession", NULL)))
+  if (!(session = rtpbin_element_factory_make (rtpbin, "rtpsession")))
     goto no_session;
 
-  if (!(demux = gst_element_factory_make ("rtpssrcdemux", NULL)))
+  if (!(demux = rtpbin_element_factory_make (rtpbin, "rtpssrcdemux")))
     goto no_demux;
 
   sess = g_new0 (GstRtpBinSession, 1);
@@ -778,8 +796,8 @@ create_session (GstRtpBin * rtpbin, gint id)
   sess->session = session;
   sess->demux = demux;
 
-  sess->rtp_funnel = gst_element_factory_make ("funnel", NULL);
-  sess->rtcp_funnel = gst_element_factory_make ("funnel", NULL);
+  sess->rtp_funnel = rtpbin_element_factory_make (rtpbin, "funnel");
+  sess->rtcp_funnel = rtpbin_element_factory_make (rtpbin, "funnel");
 
   sess->ptmap = g_hash_table_new_full (NULL, NULL, NULL,
       (GDestroyNotify) gst_caps_unref);
@@ -1759,11 +1777,11 @@ create_stream (GstRtpBinSession * session, guint32 ssrc)
 
   rtpbin = session->bin;
 
-  if (!(buffer = gst_element_factory_make ("rtpjitterbuffer", NULL)))
+  if (!(buffer = rtpbin_element_factory_make (rtpbin, "rtpjitterbuffer")))
     goto no_jitterbuffer;
 
   if (!rtpbin->ignore_pt)
-    if (!(demux = gst_element_factory_make ("rtpptdemux", NULL)))
+    if (!(demux = rtpbin_element_factory_make (rtpbin, "rtpptdemux")))
       goto no_demux;
 
   stream = g_new0 (GstRtpBinStream, 1);
@@ -3522,7 +3540,7 @@ session_maybe_create_bundle_demuxer (GstRtpBinSession * session)
           gst_rtp_bin_signals[SIGNAL_ON_BUNDLED_SSRC], 0, TRUE)) {
     GST_DEBUG_OBJECT (rtpbin, "Adding a bundle SSRC demuxer to session %u",
         session->id);
-    session->bundle_demux = gst_element_factory_make ("rtpssrcdemux", NULL);
+    session->bundle_demux = rtpbin_element_factory_make (rtpbin, "rtpssrcdemux");
     session->bundle_demux_newpad_sig = g_signal_connect (session->bundle_demux,
         "new-ssrc-pad", (GCallback) new_bundled_ssrc_pad_found, session);
     g_object_set (session->bundle_demux, "max-streams", rtpbin->max_streams, NULL);
