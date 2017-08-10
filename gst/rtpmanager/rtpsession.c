@@ -3564,7 +3564,7 @@ session_add_fir (const gchar * key, RTPSource * source, ReportData * data)
   guint16 len;
   guint8 *fci_data;
 
-  if (source->key_unit_type == RTP_KEY_UNIT_FIR)
+  if (source->key_unit_type != RTP_KEY_UNIT_FIR)
     return;
 
   len = gst_rtcp_packet_fb_get_fci_length (packet);
