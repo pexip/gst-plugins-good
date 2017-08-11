@@ -82,6 +82,7 @@ struct _GstRtpRtxSend
 
   /* bucket */
   gint max_kbps;
+  gint max_bucket_size;
   gsize bucket_size;
   GstClockTime prev_time;
 };
