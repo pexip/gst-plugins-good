@@ -141,7 +141,7 @@ create_rtp_buffer (guint32 ssrc, guint8 payload_type, guint16 seqnum)
 
 static GstBuffer *
 create_rtp_buffer_with_timestamp (guint32 ssrc, guint8 payload_type,
-    guint16 seqnum, guint32 timestamp)
+    guint16 seqnum, guint32 timestamp, GstClockTime pts)
 {
   guint payload_size = 29;
   GstRTPBuffer *rtpbuf = create_rtp_buffer_ex (ssrc, payload_type, seqnum,
@@ -152,6 +152,9 @@ create_rtp_buffer_with_timestamp (guint32 ssrc, guint8 payload_type,
 
   gst_rtp_buffer_unmap (rtpbuf);
   g_free (rtpbuf);
+
+  GST_BUFFER_PTS (ret) = pts;
+
   return ret;
 }
 
@@ -179,9 +182,7 @@ GST_START_TEST (test_rtxsend_basic)
       create_rtx_map ("application/x-rtp-pt-map", main_pt, rtx_pt);
 
   gst_harness_set_src_caps_str (h, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
 
   g_object_set (h->element, "ssrc-map", ssrc_map, NULL);
   g_object_set (h->element, "payload-type-map", pt_map, NULL);
@@ -222,9 +223,7 @@ GST_START_TEST (test_rtxsend_disabled_enabled_disabled)
       gst_structure_new_empty ("application/x-rtp-pt-map");
 
   gst_harness_set_src_caps_str (h, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
 
   /* set ssrc-map, but not pt-map, making the element work in passthrough */
   g_object_set (h->element, "ssrc-map", ssrc_map, NULL);
@@ -284,9 +283,7 @@ GST_START_TEST (test_rtxreceive_empty_rtx_packet)
       "96", G_TYPE_UINT, rtx_pt, NULL);
   g_object_set (h->element, "payload-type-map", pt_map, NULL);
   gst_harness_set_src_caps_str (h, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
 
   /* Assosiating master stream & rtx stream */
   gst_harness_push_upstream_event (h,
@@ -332,13 +329,9 @@ GST_START_TEST (test_rtxsend_rtxreceive)
   g_object_set (hsend->element, "payload-type-map", pt_map, NULL);
 
   gst_harness_set_src_caps_str (hsend, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
   gst_harness_set_src_caps_str (hrecv, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
 
   /* Push 'packets_num' packets through rtxsend to rtxreceive */
   for (i = 0; i < packets_num; i++) {
@@ -416,13 +409,9 @@ GST_START_TEST (test_rtxsend_rtxreceive_with_packet_loss)
   g_object_set (hsend->element, "payload-type-map", pt_map, NULL);
 
   gst_harness_set_src_caps_str (hsend, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
   gst_harness_set_src_caps_str (hrecv, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
 
   /* Getting rid of reconfigure event. Making sure there is no upstream
      events in the queue. Preparation step before the test. */
@@ -586,9 +575,7 @@ GST_START_TEST (test_multi_rtxsend_rtxreceive_with_packet_loss)
   pt_map = create_rtxsenders (senders, 5);
   g_object_set (hrecv->element, "payload-type-map", pt_map, NULL);
   gst_harness_set_src_caps_str (hrecv, "application/x-rtp, "
-      "media = (string)video, payload = (int)80, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "clock-rate = (int)90000");
 
   /* Getting rid of reconfigure event. Making sure there is no upstream
      events in the queue. Preparation step before the test. */
@@ -683,7 +670,8 @@ GST_START_TEST (test_multi_rtxsend_rtxreceive_with_packet_loss)
 GST_END_TEST;
 
 static void
-test_rtxsender_packet_retention (gboolean test_with_time)
+test_rtxsender_packet_retention (gboolean test_with_time,
+    gboolean clock_rate_in_caps)
 {
   guint master_ssrc = 1234567;
   guint master_pt = 96;
@@ -699,6 +687,7 @@ test_rtxsender_packet_retention (gboolean test_with_time)
   GstStructure *ssrc_map = gst_structure_new ("application/x-rtp-ssrc-map",
       "1234567", G_TYPE_UINT, rtx_ssrc, NULL);
   gint i, j;
+  GstClockTime pts = 0;
 
   h = gst_harness_new ("rtprtxsend");
 
@@ -712,15 +701,19 @@ test_rtxsender_packet_retention (gboolean test_with_time)
       "max-size-time", test_with_time ? 499 : 0,
       "payload-type-map", pt_map, "ssrc-map", ssrc_map, NULL);
 
-  gst_harness_set_src_caps_str (h, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+  if (clock_rate_in_caps) {
+    gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "clock-rate = (int)90000");
+  } else {
+    gst_harness_set_src_caps_str (h, "application/x-rtp");
+  }
 
   /* Now push all buffers and request retransmission every time for all of them */
-  for (i = 0; i < num_buffers; ++i, timestamp += timestamp_delta) {
+  for (i = 0; i < num_buffers; i++) {
+    pts += GST_SECOND / 30;
+    timestamp += timestamp_delta;
     /* Request to retransmit all the previous ones */
-    for (j = 0; j < i; ++j) {
+    for (j = 0; j < i; j++) {
       guint rtx_seqnum = 0x100 + j;
       gst_harness_push_upstream_event (h,
           create_rtx_event (master_ssrc, master_pt, rtx_seqnum));
@@ -736,7 +729,7 @@ test_rtxsender_packet_retention (gboolean test_with_time)
        to be sure, rtprtxsend can handle it properly */
     push_pull_and_verify (h,
         create_rtp_buffer_with_timestamp (master_ssrc, master_pt, 0x100 + i,
-            timestamp), FALSE, master_ssrc, master_pt, 0x100 + i);
+            timestamp, pts), FALSE, master_ssrc, master_pt, 0x100 + i);
   }
 
   gst_structure_free (pt_map);
@@ -746,14 +739,21 @@ test_rtxsender_packet_retention (gboolean test_with_time)
 
 GST_START_TEST (test_rtxsender_max_size_packets)
 {
-  test_rtxsender_packet_retention (FALSE);
+  test_rtxsender_packet_retention (FALSE, TRUE);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (test_rtxsender_max_size_time)
 {
-  test_rtxsender_packet_retention (TRUE);
+  test_rtxsender_packet_retention (TRUE, TRUE);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtxsender_max_size_time_no_clock_rate)
+{
+  test_rtxsender_packet_retention (TRUE, FALSE);
 }
 
 GST_END_TEST;
@@ -902,7 +902,6 @@ GST_START_TEST (test_rtxsender_clock_rate_map)
 
 GST_END_TEST;
 
-
 /*
 +  We use this probe to check that the RTP buffers going out of the element
 +  correspond to the caps of the pad. It was originally written for
@@ -952,9 +951,9 @@ GST_START_TEST (test_rtxsender_caps)
       "payload-type-map", pt_map, "ssrc-map", ssrc_map, NULL);
 
   gst_harness_set_src_caps_str (h, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "payload = (int)96, "
+      "ssrc = (uint)1234567, "
+      "clock-rate = (int)90000");
 
   push_pull_and_verify (h,
       create_rtp_buffer (master_ssrc, master_pt, 100),
@@ -1014,9 +1013,10 @@ GST_START_TEST (test_rtxsender_caps_multi_ssrc)
 
   /* Pushing 2 buffers from different ssrcs */
   gst_harness_set_src_caps_str (h, "application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "payload = (int)96, "
+      "ssrc = (uint)1234567, "
+      "clock-rate = (int)90000");
+
   push_pull_and_verify (h,
       create_rtp_buffer (master_ssrc0, master_pt, 100),
       FALSE, master_ssrc0, master_pt, 100);
@@ -1024,9 +1024,10 @@ GST_START_TEST (test_rtxsender_caps_multi_ssrc)
   fail_unless_equals_int (gst_harness_events_in_queue (h), 3);
 
   caps = gst_caps_from_string ("application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)7654321, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "payload = (int)96, "
+      "ssrc = (uint)7654321, "
+      "clock-rate = (int)90000");
+
   gst_harness_push_event (h, gst_event_new_caps (caps));
   push_pull_and_verify (h,
       create_rtp_buffer (master_ssrc1, master_pt, 200),
@@ -1094,9 +1095,10 @@ GST_START_TEST (test_rtxsender_caps_stress)
   gst_structure_free (pt_map);
 
   caps = gst_caps_from_string ("application/x-rtp, "
-      "media = (string)video, payload = (int)96, "
-      "ssrc = (uint)1234567, clock-rate = (int)90000, "
-      "encoding-name = (string)RAW");
+      "payload = (int)96, "
+      "ssrc = (uint)1234567, "
+      "clock-rate = (int)90000");
+
   gst_segment_init (&segment, GST_FORMAT_TIME);
   push = gst_harness_stress_push_buffer_with_cb_start (h,
       caps, &segment, caps_stress_push_buffer_cb, &seqnum, NULL);
@@ -1134,6 +1136,8 @@ rtprtx_suite (void)
   tcase_add_test (tc_chain, test_multi_rtxsend_rtxreceive_with_packet_loss);
   tcase_add_test (tc_chain, test_rtxsender_max_size_packets);
   tcase_add_test (tc_chain, test_rtxsender_max_size_time);
+  tcase_add_test (tc_chain, test_rtxsender_max_size_time_no_clock_rate);
+
   tcase_add_test (tc_chain, test_rtxqueue_max_size_packets);
   tcase_add_test (tc_chain, test_rtxqueue_max_size_time);
   tcase_add_test (tc_chain, test_rtxsender_clock_rate_map);
