@@ -212,7 +212,7 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
   guint size = gst_rtp_buffer_get_payload_len (rtp);
 
   if (G_UNLIKELY (GST_BUFFER_IS_DISCONT (rtp->buffer))) {
-    GST_LOG_OBJECT (self, "Discontinuity, flushing adapter");
+    GST_DEBUG_OBJECT (self, "Discontinuity, flushing adapter");
     gst_adapter_clear (self->adapter);
     self->started = FALSE;
   }
@@ -246,7 +246,7 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     if ((data[1] & 0x20) != 0 || (data[1] & 0x10) != 0)
       hdrsize++;
   }
-  GST_DEBUG_OBJECT (depay, "hdrsize %u, size %u, picture id 0x%x", hdrsize,
+  GST_LOG_OBJECT (depay, "hdrsize %u, size %u, picture id 0x%x", hdrsize,
       size, picture_id);
   if (G_UNLIKELY (hdrsize >= size))
     goto too_small;
@@ -264,7 +264,7 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
       goto done;
     }
 
-    GST_DEBUG_OBJECT (depay, "Found the start of the frame");
+    GST_LOG_OBJECT (depay, "Found the start of the frame");
     send_lost_event_if_needed (self, picture_id, GST_BUFFER_PTS (rtp->buffer));
 
     self->started = TRUE;
@@ -280,7 +280,7 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     GstBuffer *out;
     guint8 header[10];
 
-    GST_DEBUG_OBJECT (depay,
+    GST_LOG_OBJECT (depay,
         "Found the end of the frame (%" G_GSIZE_FORMAT " bytes)",
         gst_adapter_available (self->adapter));
     if (gst_adapter_available (self->adapter) < 10)
@@ -312,6 +312,7 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
       guint profile, width, height;
 
       GST_BUFFER_FLAG_UNSET (out, GST_BUFFER_FLAG_DELTA_UNIT);
+      GST_DEBUG_OBJECT (self, "Processed keyframe");
 
       profile = (header[0] & 0x0e) >> 1;
       width = GST_READ_UINT16_LE (header + 6) & 0x3fff;
@@ -348,7 +349,7 @@ done:
   return NULL;
 
 too_small:
-  GST_LOG_OBJECT (self, "Invalid rtp packet (too small), ignoring");
+  GST_DEBUG_OBJECT (self, "Invalid rtp packet (too small), ignoring");
   gst_adapter_clear (self->adapter);
   self->started = FALSE;
 
