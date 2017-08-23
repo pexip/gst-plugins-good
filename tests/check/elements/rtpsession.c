@@ -289,13 +289,14 @@ GST_START_TEST (test_multiple_ssrc_rr)
 GST_END_TEST;
 
 /* This verifies that rtpsession will correctly place RBs round-robin
- * across multiple SRs when there are too many senders that their RBs
- * do not fit in one SR */
+ * across multiple RRs when there are too many senders that their RBs
+ * do not fit in one RR */
 GST_START_TEST (test_multiple_senders_roundrobin_rbs)
 {
   TestData data;
   GstFlowReturn res;
   GstClockID id, tid;
+  GObject *internal_session;
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
@@ -303,11 +304,13 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
   gint queue_length;
   gint i, j, k;
   guint32 ssrc;
-  GHashTable *sr_ssrcs, *rb_ssrcs, *tmp_set;
+  GHashTable *rb_ssrcs, *tmp_set;
 
-  setup_testharness (&data, TRUE);
+  setup_testharness (&data, FALSE);
+  g_object_get (data.session, "internal-session", &internal_session, NULL);
+  g_object_set (internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
-  for (i = 0; i < 2; i++) {     /* cycles between SR reports */
+  for (i = 0; i < 2; i++) {     /* cycles between RR reports */
     for (j = 0; j < 5; j++) {   /* packets per ssrc */
       gint seq = (i * 5) + j;
       GST_DEBUG ("Push %i", seq);
@@ -336,8 +339,10 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
 
       /* crank the RTCP pad thread */
       time = gst_clock_id_get_time (id);
-      GST_DEBUG ("Advancing time to %" GST_TIME_FORMAT, GST_TIME_ARGS (time));
-      gst_test_clock_set_time (GST_TEST_CLOCK (data.clock), time);
+      if (time > gst_clock_get_time (data.clock)) {
+        GST_DEBUG ("Advancing time to %" GST_TIME_FORMAT, GST_TIME_ARGS (time));
+        gst_test_clock_set_time (GST_TEST_CLOCK (data.clock), time);
+      }
       tid = gst_test_clock_process_next_clock_id (GST_TEST_CLOCK (data.clock));
       fail_unless_equals_pointer (tid, id);
       gst_clock_id_unref (id);
@@ -351,14 +356,13 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
     GST_DEBUG ("RTCP timeout processed");
   }
 
-  sr_ssrcs = g_hash_table_new (g_direct_hash, g_direct_equal);
   rb_ssrcs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
       (GDestroyNotify) g_hash_table_unref);
 
   /* verify the rtcp packets */
-  for (i = 0; i < 2 * 35; i++) {
-    guint expected_rb_count = (i < 35) ? GST_RTCP_MAX_RB_COUNT :
-        (35 - GST_RTCP_MAX_RB_COUNT - 1);
+  for (i = 0; i < 2; i++) {
+    guint expected_rb_count = (i < 1) ? GST_RTCP_MAX_RB_COUNT :
+        (35 - GST_RTCP_MAX_RB_COUNT);
 
     GST_DEBUG ("pop %d", i);
 
@@ -369,19 +373,16 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
     gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
     g_assert (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
     g_assert_cmpint (gst_rtcp_packet_get_type (&rtcp_packet), ==,
-        GST_RTCP_TYPE_SR);
+        GST_RTCP_TYPE_RR);
 
-    gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, NULL, NULL,
-        NULL);
-    g_assert_cmpint (ssrc, >=, 10000);
-    g_assert_cmpint (ssrc, <=, 10035);
-    g_hash_table_add (sr_ssrcs, GUINT_TO_POINTER (ssrc));
+    ssrc = gst_rtcp_packet_rr_get_ssrc (&rtcp_packet);
+    g_assert_cmpint (ssrc, ==, 0xDEADBEEF);
 
     /* inspect the RBs */
     g_assert_cmpint (gst_rtcp_packet_get_rb_count (&rtcp_packet), ==,
         expected_rb_count);
 
-    if (i < 35) {
+    if (i < 1) {
       tmp_set = g_hash_table_new (g_direct_hash, g_direct_equal);
       g_hash_table_insert (rb_ssrcs, GUINT_TO_POINTER (ssrc), tmp_set);
     } else {
@@ -399,27 +400,239 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
 
     gst_rtcp_buffer_unmap (&rtcp);
     gst_buffer_unref (buf);
-
-    /* cycle done, verify all ssrcs have issued SR reports */
-    if ((i + 1) == 35 || (i + 1) == (2 * 35)) {
-      g_assert_cmpint (g_hash_table_size (sr_ssrcs), ==, 35);
-      g_hash_table_remove_all (sr_ssrcs);
-    }
   }
 
-  /* now verify all other ssrcs have been reported on each ssrc's SR */
-  g_assert_cmpint (g_hash_table_size (rb_ssrcs), ==, 35);
-  for (i = 10000; i < 10035; i++) {
-    tmp_set = g_hash_table_lookup (rb_ssrcs, GUINT_TO_POINTER (i));
-    g_assert (tmp_set);
-    /* SR contains RBs for each other ssrc except the ssrc of the SR */
-    g_assert_cmpint (g_hash_table_size (tmp_set), ==, 34);
-    g_assert (!g_hash_table_contains (tmp_set, GUINT_TO_POINTER (i)));
-  }
+  /* now verify all received ssrcs have been reported */
+  g_assert_cmpint (g_hash_table_size (rb_ssrcs), ==, 1);
+  tmp_set = g_hash_table_lookup (rb_ssrcs, GUINT_TO_POINTER (0xDEADBEEF));
+  g_assert (tmp_set);
+  g_assert_cmpint (g_hash_table_size (tmp_set), ==, 35);
 
-  g_hash_table_unref (sr_ssrcs);
   g_hash_table_unref (rb_ssrcs);
 
+  destroy_testharness (&data);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_no_rbs_for_internal_senders)
+{
+  TestData data;
+  GstFlowReturn res;
+  GstClockID id, tid;
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket rtcp_packet;
+  GstClockTime time;
+  gint queue_length;
+  gint i, j, k;
+  guint32 ssrc;
+  GHashTable *sr_ssrcs, *rb_ssrcs, *tmp_set;
+  GstPad *src, *sink, *pad;
+  GstSegment seg;
+  GstCaps *caps;
+
+  setup_testharness (&data, TRUE);
+
+  /* Push RTP from our send SSRCs */
+  for (j = 0; j < 5; j++) {   /* packets per ssrc */
+    GST_DEBUG ("Push %i", j);
+
+    gst_test_clock_advance_time (GST_TEST_CLOCK (data.clock),
+        200 * GST_MSECOND);
+
+    for (k = 0; k < 2; k++) {        /* number of ssrcs */
+      buf =
+          generate_test_buffer (j * 200 * GST_MSECOND, FALSE, j,
+          j * 200, 10000 + k);
+      res = gst_pad_push (data.src, buf);
+      fail_unless (res == GST_FLOW_OK || res == GST_FLOW_FLUSHING);
+    }
+
+    GST_DEBUG ("pushed %i", j);
+  }
+
+  queue_length = g_async_queue_length (data.rtcp_queue);
+
+  do {
+    /* wait for the RTCP pad thread to output its data
+     * and start waiting on the next timeout */
+    gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock),
+        &id);
+
+    /* crank the RTCP pad thread */
+    time = gst_clock_id_get_time (id);
+    if (time > gst_clock_get_time (data.clock)) {
+      GST_DEBUG ("Advancing time to %" GST_TIME_FORMAT, GST_TIME_ARGS (time));
+      gst_test_clock_set_time (GST_TEST_CLOCK (data.clock), time);
+    }
+    tid = gst_test_clock_process_next_clock_id (GST_TEST_CLOCK (data.clock));
+    fail_unless_equals_pointer (tid, id);
+    gst_clock_id_unref (id);
+    gst_clock_id_unref (tid);
+
+    /* and retry as long as there are no new RTCP packets out,
+     * because the RTCP thread may randomly decide to reschedule
+     * the RTCP timeout for later */
+  } while (g_async_queue_length (data.rtcp_queue) == queue_length);
+
+  GST_DEBUG ("RTCP timeout processed");
+
+  sr_ssrcs = g_hash_table_new (g_direct_hash, g_direct_equal);
+
+  /* verify the rtcp packets */
+  for (i = 0; i < 2; i++) {
+    GST_DEBUG ("pop %d", i);
+
+    buf = g_async_queue_pop (data.rtcp_queue);
+    g_assert (buf != NULL);
+    g_assert (gst_rtcp_buffer_validate (buf));
+
+    gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+    g_assert (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+    g_assert_cmpint (gst_rtcp_packet_get_type (&rtcp_packet), ==,
+        GST_RTCP_TYPE_SR);
+
+    gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, NULL, NULL,
+        NULL);
+    g_assert_cmpint (ssrc, >=, 10000);
+    g_assert_cmpint (ssrc, <=, 10001);
+    g_hash_table_add (sr_ssrcs, GUINT_TO_POINTER (ssrc));
+
+    /* There should be no RBs as there are no remote senders */
+    g_assert_cmpint (gst_rtcp_packet_get_rb_count (&rtcp_packet), ==, 0);
+
+    gst_rtcp_buffer_unmap (&rtcp);
+    gst_buffer_unref (buf);
+  }
+
+  /* Ensure both internal senders generated RTCP */
+  g_assert_cmpint (g_hash_table_size (sr_ssrcs), ==, 2);
+  g_hash_table_unref (sr_ssrcs);
+
+  /* Create receive infrastructure */
+  src = gst_pad_new ("src", GST_PAD_SRC);
+  g_assert (src);
+  pad = gst_element_get_request_pad (data.session, "recv_rtp_sink");
+  g_assert (pad);
+  g_assert_cmpint (gst_pad_link (src, pad), ==, GST_PAD_LINK_OK);
+  gst_object_unref (pad);
+
+  sink = gst_pad_new ("sink", GST_PAD_SINK);
+  g_assert (sink);
+  pad = gst_element_get_static_pad (data.session, "recv_rtp_src");
+  g_assert (pad);
+  g_assert_cmpint (gst_pad_link (pad, sink), ==, GST_PAD_LINK_OK);
+  gst_object_unref (pad);
+
+  g_assert (gst_pad_set_active (src, TRUE));
+
+  caps = generate_caps();
+  gst_segment_init (&seg, GST_FORMAT_TIME);
+  gst_pad_push_event (src, gst_event_new_stream_start ("stream0"));
+  gst_pad_set_caps (src, caps);
+  gst_pad_push_event (src, gst_event_new_segment (&seg));
+  gst_caps_unref (caps);
+
+  /* Generate RTP from remote side */
+  for (j = 0; j < 5; j++) {   /* packets per ssrc */
+    GST_DEBUG ("Push %i", j);
+
+    gst_test_clock_advance_time (GST_TEST_CLOCK (data.clock),
+        200 * GST_MSECOND);
+
+    for (k = 0; k < 2; k++) {        /* number of ssrcs */
+      buf =
+          generate_test_buffer (j * 200 * GST_MSECOND, FALSE, j,
+          j * 200, 20000 + k);
+      res = gst_pad_push (src, buf);
+      fail_unless (res == GST_FLOW_OK || res == GST_FLOW_FLUSHING);
+    }
+
+    GST_DEBUG ("pushed %i", j);
+  }
+
+  queue_length = g_async_queue_length (data.rtcp_queue);
+
+  do {
+    /* wait for the RTCP pad thread to output its data
+     * and start waiting on the next timeout */
+    gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock),
+        &id);
+
+    /* crank the RTCP pad thread */
+    time = gst_clock_id_get_time (id);
+    if (time > gst_clock_get_time (data.clock)) {
+      GST_DEBUG ("Advancing time to %" GST_TIME_FORMAT, GST_TIME_ARGS (time));
+      gst_test_clock_set_time (GST_TEST_CLOCK (data.clock), time);
+    }
+    tid = gst_test_clock_process_next_clock_id (GST_TEST_CLOCK (data.clock));
+    fail_unless_equals_pointer (tid, id);
+    gst_clock_id_unref (id);
+    gst_clock_id_unref (tid);
+
+    /* and retry as long as there are no new RTCP packets out,
+     * because the RTCP thread may randomly decide to reschedule
+     * the RTCP timeout for later */
+  } while (g_async_queue_length (data.rtcp_queue) == queue_length);
+
+  GST_DEBUG ("RTCP timeout processed");
+
+  sr_ssrcs = g_hash_table_new (g_direct_hash, g_direct_equal);
+  rb_ssrcs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
+      (GDestroyNotify) g_hash_table_unref);
+
+  /* verify the rtcp packets */
+  for (i = 0; i < 2; i++) {
+    GST_DEBUG ("pop %d", i);
+
+    buf = g_async_queue_pop (data.rtcp_queue);
+    g_assert (buf != NULL);
+    g_assert (gst_rtcp_buffer_validate (buf));
+
+    gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+    g_assert (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+    g_assert_cmpint (gst_rtcp_packet_get_type (&rtcp_packet), ==,
+        GST_RTCP_TYPE_SR);
+
+    gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, NULL, NULL,
+        NULL);
+    g_assert_cmpint (ssrc, >=, 10000);
+    g_assert_cmpint (ssrc, <=, 10001);
+    g_hash_table_add (sr_ssrcs, GUINT_TO_POINTER (ssrc));
+
+    /* There should be 2 RBs: one for each remote sender */
+    g_assert_cmpint (gst_rtcp_packet_get_rb_count (&rtcp_packet), ==, 2);
+
+    tmp_set = g_hash_table_new (g_direct_hash, g_direct_equal);
+    g_hash_table_insert (rb_ssrcs, GUINT_TO_POINTER (ssrc), tmp_set);
+
+    for (j = 0; j < 2; j++) {
+      gst_rtcp_packet_get_rb (&rtcp_packet, j, &ssrc, NULL, NULL,
+          NULL, NULL, NULL, NULL);
+      g_assert_cmpint (ssrc, >=, 20000);
+      g_assert_cmpint (ssrc, <=, 20001);
+      g_hash_table_add (tmp_set, GUINT_TO_POINTER (ssrc));
+    }
+
+    gst_rtcp_buffer_unmap (&rtcp);
+    gst_buffer_unref (buf);
+  }
+
+  /* now verify all received ssrcs have been reported */
+  g_assert_cmpint (g_hash_table_size (sr_ssrcs), ==, 2);
+  g_assert_cmpint (g_hash_table_size (rb_ssrcs), ==, 2);
+  for (i = 10000; i < 10002; i++) {
+    tmp_set = g_hash_table_lookup (rb_ssrcs, GUINT_TO_POINTER (i));
+    g_assert (tmp_set);
+    g_assert_cmpint (g_hash_table_size (tmp_set), ==, 2);
+  }
+
+  g_hash_table_unref (rb_ssrcs);
+  g_hash_table_unref (sr_ssrcs);
+
+  gst_object_unref(sink);
+  gst_object_unref(src);
   destroy_testharness (&data);
 }
 
@@ -1201,6 +1414,7 @@ rtpsession_suite (void)
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_multiple_ssrc_rr);
   tcase_add_test (tc_chain, test_multiple_senders_roundrobin_rbs);
+  tcase_add_test (tc_chain, test_no_rbs_for_internal_senders);
   tcase_add_test (tc_chain, test_internal_sources_timeout);
   tcase_add_test (tc_chain, test_receive_rtcp_app_packet);
   tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet);
