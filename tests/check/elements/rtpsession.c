@@ -31,48 +31,43 @@
 #include <gst/rtp/gstrtcpbuffer.h>
 #include <gst/net/gstnetaddressmeta.h>
 
-static const guint payload_size = 160;
-static const guint clock_rate = 8000;
-static const guint payload_type = 0;
-
-typedef struct
-{
-  GstElement *session;
-  GstPad *src, *rtcp_src, *sink, *rtcp_sink;
-  GstClock *clock;
-  GAsyncQueue *rtcp_queue;
-} TestData;
+#define TEST_BUF_CLOCK_RATE 8000
+#define TEST_BUF_PT 0
+#define TEST_BUF_SSRC 0x01BADBAD
+#define TEST_BUF_MS  20
+#define TEST_BUF_DURATION (TEST_BUF_MS * GST_MSECOND)
+#define TEST_BUF_SIZE (64000 * TEST_BUF_MS / 1000)
+#define TEST_RTP_TS_DURATION (TEST_BUF_CLOCK_RATE * TEST_BUF_MS / 1000)
 
 static GstCaps *
 generate_caps (void)
 {
   return gst_caps_new_simple ("application/x-rtp",
-      "clock-rate", G_TYPE_INT, clock_rate,
-      "payload-type", G_TYPE_INT, payload_type, NULL);
+      "clock-rate", G_TYPE_INT, TEST_BUF_CLOCK_RATE,
+      "payload", G_TYPE_INT, TEST_BUF_PT,
+      NULL);
 }
 
 static GstBuffer *
-generate_test_buffer (GstClockTime gst_ts,
-    gboolean marker_bit, guint seq_num, guint32 rtp_ts, guint ssrc)
+generate_test_buffer_full (GstClockTime dts,
+    guint seq_num, guint32 rtp_ts, guint ssrc)
 {
   GstBuffer *buf;
   guint8 *payload;
   guint i;
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
 
-  buf = gst_rtp_buffer_new_allocate (payload_size, 0, 0);
-  GST_BUFFER_DTS (buf) = gst_ts;
-  GST_BUFFER_PTS (buf) = gst_ts;
+  buf = gst_rtp_buffer_new_allocate (TEST_BUF_SIZE, 0, 0);
+  GST_BUFFER_DTS (buf) = dts;
 
   gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp);
-  gst_rtp_buffer_set_payload_type (&rtp, payload_type);
-  gst_rtp_buffer_set_marker (&rtp, marker_bit);
+  gst_rtp_buffer_set_payload_type (&rtp, TEST_BUF_PT);
   gst_rtp_buffer_set_seq (&rtp, seq_num);
   gst_rtp_buffer_set_timestamp (&rtp, rtp_ts);
   gst_rtp_buffer_set_ssrc (&rtp, ssrc);
 
   payload = gst_rtp_buffer_get_payload (&rtp);
-  for (i = 0; i < payload_size; i++)
+  for (i = 0; i < TEST_BUF_SIZE; i++)
     payload[i] = 0xff;
 
   gst_rtp_buffer_unmap (&rtp);
@@ -80,131 +75,12 @@ generate_test_buffer (GstClockTime gst_ts,
   return buf;
 }
 
-static GstFlowReturn
-test_sink_pad_chain_cb (GstPad * pad, GstObject * parent, GstBuffer * buffer)
+static GstBuffer *
+generate_test_buffer (guint seq_num, guint ssrc)
 {
-  TestData *data = gst_pad_get_element_private (pad);
-  g_async_queue_push (data->rtcp_queue, buffer);
-  GST_DEBUG ("chained");
-  return GST_FLOW_OK;
+  return generate_test_buffer_full (seq_num * TEST_BUF_DURATION,
+      seq_num, seq_num * TEST_RTP_TS_DURATION, ssrc);
 }
-
-static GstCaps *
-pt_map_requested (GstElement * elemen, guint pt, gpointer data)
-{
-  return generate_caps ();
-}
-
-static void
-destroy_testharness (TestData * data)
-{
-  g_assert_cmpint (gst_element_set_state (data->session, GST_STATE_NULL),
-      ==, GST_STATE_CHANGE_SUCCESS);
-  gst_object_unref (data->session);
-  data->session = NULL;
-
-  gst_object_unref (data->src);
-  data->src = NULL;
-
-  gst_object_unref (data->rtcp_src);
-  data->rtcp_src = NULL;
-
-  gst_object_unref (data->sink);
-  data->sink = NULL;
-
-  gst_object_unref (data->rtcp_sink);
-  data->rtcp_sink = NULL;
-
-  gst_object_unref (data->clock);
-  data->clock = NULL;
-
-  g_async_queue_unref (data->rtcp_queue);
-  data->rtcp_queue = NULL;
-}
-
-static void
-setup_testharness (TestData * data, gboolean session_as_sender)
-{
-  GstPad *rtp_sink_pad, *rtcp_sink_pad, *rtp_src_pad, *rtcp_src_pad;
-  GstSegment seg;
-  GstMiniObject *obj;
-  GstCaps *caps;
-
-  data->clock = gst_test_clock_new ();
-  GST_DEBUG ("Setting default system clock to test clock");
-  gst_system_clock_set_default (data->clock);
-  g_assert (data->clock);
-  gst_test_clock_set_time (GST_TEST_CLOCK (data->clock), 0);
-
-  data->session = gst_element_factory_make ("rtpsession", NULL);
-  g_signal_connect (data->session, "request-pt-map",
-      (GCallback) pt_map_requested, data);
-  g_assert (data->session);
-  gst_element_set_clock (data->session, data->clock);
-  g_assert_cmpint (gst_element_set_state (data->session,
-          GST_STATE_PLAYING), !=, GST_STATE_CHANGE_FAILURE);
-
-  data->rtcp_queue =
-      g_async_queue_new_full ((GDestroyNotify) gst_mini_object_unref);
-
-  /* link in the test source-pad */
-  data->src = gst_pad_new ("src", GST_PAD_SRC);
-  g_assert (data->src);
-  rtp_sink_pad = gst_element_get_request_pad (data->session,
-      session_as_sender ? "send_rtp_sink" : "recv_rtp_sink");
-  g_assert (rtp_sink_pad);
-  g_assert_cmpint (gst_pad_link (data->src, rtp_sink_pad), ==, GST_PAD_LINK_OK);
-  gst_object_unref (rtp_sink_pad);
-
-  data->rtcp_src = gst_pad_new ("src", GST_PAD_SRC);
-  g_assert (data->rtcp_src);
-  rtcp_sink_pad = gst_element_get_request_pad (data->session, "recv_rtcp_sink");
-  g_assert (rtcp_sink_pad);
-  g_assert_cmpint (gst_pad_link (data->rtcp_src, rtcp_sink_pad), ==,
-      GST_PAD_LINK_OK);
-  gst_object_unref (rtcp_sink_pad);
-
-  /* link in the test sink-pad */
-  data->sink = gst_pad_new ("sink", GST_PAD_SINK);
-  g_assert (data->sink);
-  rtp_src_pad = gst_element_get_static_pad (data->session,
-      session_as_sender ? "send_rtp_src" : "recv_rtp_src");
-  g_assert (rtp_src_pad);
-  g_assert_cmpint (gst_pad_link (rtp_src_pad, data->sink), ==, GST_PAD_LINK_OK);
-  gst_object_unref (rtp_src_pad);
-
-  data->rtcp_sink = gst_pad_new ("sink", GST_PAD_SINK);
-  g_assert (data->rtcp_sink);
-  gst_pad_set_element_private (data->rtcp_sink, data);
-  caps = generate_caps ();
-  gst_pad_set_caps (data->rtcp_sink, caps);
-  gst_pad_set_chain_function (data->rtcp_sink, test_sink_pad_chain_cb);
-  rtcp_src_pad = gst_element_get_request_pad (data->session, "send_rtcp_src");
-  g_assert (rtcp_src_pad);
-  g_assert_cmpint (gst_pad_link (rtcp_src_pad, data->rtcp_sink), ==,
-      GST_PAD_LINK_OK);
-  gst_object_unref (rtcp_src_pad);
-
-  g_assert (gst_pad_set_active (data->src, TRUE));
-  g_assert (gst_pad_set_active (data->rtcp_src, TRUE));
-  g_assert (gst_pad_set_active (data->rtcp_sink, TRUE));
-
-  gst_segment_init (&seg, GST_FORMAT_TIME);
-  gst_pad_push_event (data->src, gst_event_new_stream_start ("stream0"));
-  gst_pad_set_caps (data->src, caps);
-  gst_pad_push_event (data->src, gst_event_new_segment (&seg));
-  gst_caps_unref (caps);
-
-  caps = gst_caps_new_empty_simple ("application/x-rtcp");
-  gst_pad_push_event (data->rtcp_src, gst_event_new_stream_start ("stream0"));
-  gst_pad_set_caps (data->rtcp_src, caps);
-  gst_pad_push_event (data->rtcp_src, gst_event_new_segment (&seg));
-  gst_caps_unref (caps);
-
-  while ((obj = g_async_queue_try_pop (data->rtcp_queue)))
-    gst_mini_object_unref (obj);
-}
-
 
 typedef struct
 {
@@ -260,6 +136,8 @@ session_harness_new (void)
 static void
 session_harness_free (SessionHarness * h)
 {
+  gst_system_clock_set_default (NULL);
+
   gst_caps_unref (h->caps);
   gst_object_unref (h->testclock);
 
@@ -282,6 +160,12 @@ static GstFlowReturn
 session_harness_recv_rtp (SessionHarness * h, GstBuffer * buf)
 {
   return gst_harness_push (h->recv_rtp_h, buf);
+}
+
+static GstFlowReturn
+session_harness_recv_rtcp (SessionHarness * h, GstBuffer * buf)
+{
+  return gst_harness_push (h->rtcp_h, buf);
 }
 
 static GstBuffer *
@@ -341,8 +225,7 @@ GST_START_TEST (test_multiple_ssrc_rr)
   /* receive buffers with multiple ssrcs */
   for (i = 0; i < 2; i++) {
     for (j = 0; j < G_N_ELEMENTS (ssrcs); j++) {
-      in_buf = generate_test_buffer (i * 20 * GST_MSECOND, FALSE, i, i * 20,
-          ssrcs[j]);
+      in_buf = generate_test_buffer (i, ssrcs[j]);
       res = session_harness_recv_rtp (h, in_buf);
       fail_unless_equals_int (GST_FLOW_OK, res);
     }
@@ -398,8 +281,7 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
     for (j = 0; j < 5; j++) {   /* packets per ssrc */
       gint seq = (i * 5) + j;
       for (k = 0; k < 35; k++) {        /* number of ssrcs */
-        buf = generate_test_buffer (seq * 20 * GST_MSECOND, FALSE, seq,
-            seq * 20, 10000 + k);
+        buf = generate_test_buffer (seq, 10000 + k);
         res = session_harness_recv_rtp (h, buf);
         fail_unless_equals_int (GST_FLOW_OK, res);
       }
@@ -478,8 +360,7 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
   /* Push RTP from our send SSRCs */
   for (j = 0; j < 5; j++) {     /* packets per ssrc */
     for (k = 0; k < 2; k++) {   /* number of ssrcs */
-      buf = generate_test_buffer (j * 20 * GST_MSECOND, FALSE, j,
-          j * 20, 10000 + k);
+      buf = generate_test_buffer (j, 10000 + k);
       res = session_harness_send_rtp (h, buf);
       fail_unless_equals_int (GST_FLOW_OK, res);
     }
@@ -521,8 +402,7 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
   /* Generate RTP from remote side */
   for (j = 0; j < 5; j++) {     /* packets per ssrc */
     for (k = 0; k < 2; k++) {   /* number of ssrcs */
-      buf = generate_test_buffer (j * 20 * GST_MSECOND, FALSE, j,
-          j * 20, 20000 + k);
+      buf = generate_test_buffer (j, 20000 + k);
       res = session_harness_recv_rtp (h, buf);
       fail_unless_equals_int (GST_FLOW_OK, res);
     }
@@ -632,8 +512,7 @@ GST_START_TEST (test_internal_sources_timeout)
   gst_harness_set_src_caps (h->send_rtp_h, caps);
 
   for (i = 1; i < 4; i++) {
-    buf = generate_test_buffer (i * 200 * GST_MSECOND, FALSE, i, i * 200,
-        0x01BADBAD);
+    buf = generate_test_buffer (i, 0x01BADBAD);
     res = session_harness_send_rtp (h, buf);
     fail_unless_equals_int (GST_FLOW_OK, res);
   }
@@ -737,43 +616,38 @@ on_app_rtcp_cb (GObject * session, guint subtype, guint ssrc,
 
 GST_START_TEST (test_receive_rtcp_app_packet)
 {
-  GstHarness *h;
-  GstBuffer *buffer;
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket packet;
   RTCPAppResult result = { 0 };
-  GstElement *internal_session;
   guint8 data[] = { 0x11, 0x22, 0x33, 0x44 };
 
-  h = gst_harness_new_with_padnames ("rtpsession", "recv_rtcp_sink", NULL);
-  g_object_get (h->element, "internal-session", &internal_session, NULL);
-
-  g_signal_connect (internal_session, "on-app-rtcp",
+  g_signal_connect (h->internal_session, "on-app-rtcp",
       G_CALLBACK (on_app_rtcp_cb), &result);
 
   /* Push APP buffer with no data */
-  buffer = gst_rtcp_buffer_new (1000);
-  fail_unless (gst_rtcp_buffer_map (buffer, GST_MAP_READWRITE, &rtcp));
+  buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
   fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_APP, &packet));
   gst_rtcp_packet_app_set_subtype (&packet, 21);
   gst_rtcp_packet_app_set_ssrc (&packet, 0x11111111);
   gst_rtcp_packet_app_set_name (&packet, "Test");
   gst_rtcp_buffer_unmap (&rtcp);
 
-  gst_harness_set_src_caps_str (h, "application/x-rtcp");
-  fail_unless_equals_int (gst_harness_push (h, buffer), GST_FLOW_OK);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
 
-  fail_unless_equals_int (result.subtype, 21);
-  fail_unless_equals_int (result.ssrc, 0x11111111);
-  fail_unless_equals_string (result.name, "Test");
-  fail_unless_equals_pointer (result.data, NULL);
+  fail_unless_equals_int (21, result.subtype);
+  fail_unless_equals_int (0x11111111, result.ssrc);
+  fail_unless_equals_string ("Test", result.name);
+  fail_unless_equals_pointer (NULL, result.data);
 
   g_free (result.name);
 
   /* Push APP buffer with data */
   memset (&result, 0, sizeof (result));
-  buffer = gst_rtcp_buffer_new (1000);
-  fail_unless (gst_rtcp_buffer_map (buffer, GST_MAP_READWRITE, &rtcp));
+  buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
   fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_APP, &packet));
   gst_rtcp_packet_app_set_subtype (&packet, 22);
   gst_rtcp_packet_app_set_ssrc (&packet, 0x22222222);
@@ -782,33 +656,29 @@ GST_START_TEST (test_receive_rtcp_app_packet)
   memcpy (gst_rtcp_packet_app_get_data (&packet), data, sizeof (data));
   gst_rtcp_buffer_unmap (&rtcp);
 
-  fail_unless_equals_int (gst_harness_push (h, buffer), GST_FLOW_OK);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
 
-  fail_unless_equals_int (result.subtype, 22);
-  fail_unless_equals_int (result.ssrc, 0x22222222);
-  fail_unless_equals_string (result.name, "Test");
+  fail_unless_equals_int (22, result.subtype);
+  fail_unless_equals_int (0x22222222, result.ssrc);
+  fail_unless_equals_string ("Test", result.name);
   fail_unless (gst_buffer_memcmp (result.data, 0, data, sizeof (data)) == 0);
 
   g_free (result.name);
   gst_buffer_unref (result.data);
 
-  gst_object_unref (internal_session);
-  gst_harness_teardown (h);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (test_illegal_rtcp_fb_packet)
 {
-  TestData data;
-  GObject *internal_session;
+  SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   /* Zero length RTCP feedback packet (reduced size) */
   const guint8 rtcp_zero_fb_pkt[] = { 0x8f, 0xce, 0x00, 0x00 };
 
-  setup_testharness (&data, TRUE);
-  g_object_get (data.session, "internal-session", &internal_session, NULL);
-  g_object_set (internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
   buf = gst_buffer_new_and_alloc (sizeof (rtcp_zero_fb_pkt));
   gst_buffer_fill (buf, 0, rtcp_zero_fb_pkt, sizeof (rtcp_zero_fb_pkt));
@@ -816,10 +686,9 @@ GST_START_TEST (test_illegal_rtcp_fb_packet)
 
   /* Push the packet, this did previously crash because length of packet was
    * never validated. */
-  fail_unless (gst_pad_push (data.rtcp_src, buf) == GST_FLOW_OK);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
 
-  g_object_unref (internal_session);
-  destroy_testharness (&data);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
@@ -932,44 +801,27 @@ create_bye_rtcp (guint32 ssrc)
 
 GST_START_TEST (test_ignore_suspicious_bye)
 {
-  GstHarness *h_rtcp = NULL;
-  GstHarness *h_send = NULL;
+  SessionHarness *h = session_harness_new ();
   gboolean cb_called = FALSE;
-  GstTestClock *testclock = GST_TEST_CLOCK (gst_test_clock_new ());
-
-  /* use testclock as the systemclock to capture the rtcp thread waits */
-  gst_system_clock_set_default (GST_CLOCK (testclock));
-
-  h_rtcp =
-      gst_harness_new_with_padnames ("rtpsession", "recv_rtcp_sink",
-      "send_rtcp_src");
-  h_send =
-      gst_harness_new_with_element (h_rtcp->element, "send_rtp_sink",
-      "send_rtp_src");
 
   /* connect to the stats-reporting */
-  g_signal_connect (h_rtcp->element, "notify::stats",
+  g_signal_connect (h->session, "notify::stats",
       G_CALLBACK (suspicious_bye_cb), &cb_called);
 
   /* Push RTP buffer making our internal SSRC=0xDEADBEEF */
-  gst_harness_set_src_caps_str (h_send,
-      "application/x-rtp,ssrc=(uint)0xDEADBEEF,"
-      "clock-rate=90000,seqnum-offset=(uint)12345");
-  gst_harness_push (h_send,
-      generate_test_buffer (0, FALSE, 12345, 0, 0xDEADBEEF));
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
 
-  /* Push BYE RTCP with internal SSRC (0xDEADBEEF) */
-  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
-  gst_harness_push (h_rtcp, create_bye_rtcp (0xDEADBEEF));
+  /* Receive BYE RTCP referencing our internal SSRC(!?!) (0xDEADBEEF) */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtcp (h, create_bye_rtcp (0xDEADBEEF)));
 
   /* "crank" and check the stats */
-  g_assert (gst_test_clock_crank (testclock));
-  gst_buffer_unref (gst_harness_pull (h_rtcp));
+  session_harness_crank_clock (h);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
   fail_unless (cb_called);
 
-  gst_harness_teardown (h_send);
-  gst_harness_teardown (h_rtcp);
-  gst_object_unref (testclock);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
@@ -1002,9 +854,7 @@ _ssrc_pse (GObject * session, GObject * src, guint type,
 
 GST_START_TEST (test_creating_srrr)
 {
-  TestData data;
-  GObject *internal_session;
-  GstClockID id, tid;
+  SessionHarness *h = session_harness_new ();
   guint i;
   GstFlowReturn res;
   GstBuffer *buf;
@@ -1012,43 +862,22 @@ GST_START_TEST (test_creating_srrr)
   GstRTCPPacket packet;
   guint pse_ssrc = 0;
 
-  setup_testharness (&data, FALSE);     /* Setup as receiver */
-
   /* Connect to on-creating-srrr which will append 8 bytes of
    * profile-specific extension data */
-  g_object_get (data.session, "internal-session", &internal_session, NULL);
-  g_object_set (internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
-  g_signal_connect (internal_session, "on-creating-srrr",
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_signal_connect (h->internal_session, "on-creating-srrr",
       G_CALLBACK (_creating_srrr), NULL);
-  g_object_unref (internal_session);
 
-  gst_test_clock_set_time (GST_TEST_CLOCK (data.clock), 10 * GST_MSECOND);
-
-  for (i = 0; i < 5; i++) {
-    GST_DEBUG ("Push %i", i);
-    res = gst_pad_push (data.src,
-        generate_test_buffer (i * 20 * GST_MSECOND, FALSE, i, i * 20,
-            0x01BADBAD));
-    fail_unless (res == GST_FLOW_OK || res == GST_FLOW_FLUSHING);
-
-    gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock), &id);
-    tid = gst_test_clock_process_next_clock_id (GST_TEST_CLOCK (data.clock));
-    gst_clock_id_unref (id);
-    if (tid)
-      gst_clock_id_unref (tid);
+  /* receive some buffers */
+  for (i = 0; i < 2; i++) {
+    buf = generate_test_buffer (i, 0x01BADBAD);
+    res = session_harness_recv_rtp (h, buf);
+    fail_unless_equals_int (GST_FLOW_OK, res);
   }
 
-  gst_test_clock_set_time (GST_TEST_CLOCK (data.clock),
-      gst_clock_id_get_time (id) + (2 * GST_SECOND));
-  gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock), &id);
-  tid = gst_test_clock_process_next_clock_id (GST_TEST_CLOCK (data.clock));
-  gst_clock_id_unref (id);
-  gst_clock_id_unref (tid);
-
-  /* Pop of the RTCP buffer generated by rtpsession */
-  fail_unless ((buf = g_async_queue_pop (data.rtcp_queue)) != NULL);
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
   fail_unless (gst_rtcp_buffer_validate (buf));
-
   gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
   fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));
   fail_unless_equals_int (GST_RTCP_TYPE_RR, gst_rtcp_packet_get_type (&packet));
@@ -1056,145 +885,86 @@ GST_START_TEST (test_creating_srrr)
       gst_rtcp_packet_get_profile_specific_ext_length (&packet));
   gst_rtcp_buffer_unmap (&rtcp);
 
-  destroy_testharness (&data);
-
-  /* Setup as new harness and push the RTCP buffer into it to test on-ssrc-pse
-   * signal on rtpsession */
-  setup_testharness (&data, TRUE);
-
-  g_object_get (data.session, "internal-session", &internal_session, NULL);
-  g_signal_connect (internal_session, "on-ssrc-pse",
+  /* now "receive" the same RTCP buffer into the session to test on-ssrc-pse
+   * signal */
+  g_signal_connect (h->internal_session, "on-ssrc-pse",
       G_CALLBACK (_ssrc_pse), &pse_ssrc);
-  g_object_unref (internal_session);
-
   fail_unless_equals_int (0, pse_ssrc);
-  res = gst_pad_push (data.rtcp_src, buf);
-  fail_unless (res == GST_FLOW_OK || res == GST_FLOW_FLUSHING);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
   fail_unless_equals_int (0xDEADBEEF, pse_ssrc);
 
-  destroy_testharness (&data);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (test_dont_send_rtcp_while_idle)
 {
-  GstHarness *h_rtcp;
-  GstHarness *h_send;
-  GstClock *clock = gst_test_clock_new ();
-  GstTestClock *testclock = GST_TEST_CLOCK (clock);
-
-  /* use testclock as the systemclock to capture the rtcp thread waits */
-  gst_system_clock_set_default (clock);
-
-  h_rtcp =
-      gst_harness_new_with_padnames ("rtpsession", "recv_rtcp_sink",
-      "send_rtcp_src");
-  h_send =
-      gst_harness_new_with_element (h_rtcp->element, "send_rtp_sink",
-      "send_rtp_src");
+  SessionHarness *h = session_harness_new ();
 
   /* verify the RTCP thread has not started */
-  fail_unless_equals_int (0, gst_test_clock_peek_id_count (testclock));
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
   /* and that no RTCP has been pushed */
-  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h_rtcp));
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
 
-  gst_harness_teardown (h_send);
-  gst_harness_teardown (h_rtcp);
-  gst_object_unref (clock);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (test_send_rtcp_when_signalled)
 {
-  GstHarness *h_rtcp;
-  GstHarness *h_send;
-  GstClock *clock = gst_test_clock_new ();
-  GstTestClock *testclock = GST_TEST_CLOCK (clock);
-  GstElement *internal_session;
+  SessionHarness *h = session_harness_new ();
   gboolean ret;
 
-  /* use testclock as the systemclock to capture the rtcp thread waits */
-  gst_system_clock_set_default (clock);
-
-  h_rtcp =
-      gst_harness_new_with_padnames ("rtpsession", "recv_rtcp_sink",
-      "send_rtcp_src");
-  h_send =
-      gst_harness_new_with_element (h_rtcp->element, "send_rtp_sink",
-      "send_rtp_src");
-
-  g_object_get (h_rtcp->element, "internal-session", &internal_session, NULL);
-
   /* verify the RTCP thread has not started */
-  fail_unless_equals_int (0, gst_test_clock_peek_id_count (testclock));
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
   /* and that no RTCP has been pushed */
-  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h_rtcp));
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
 
   /* then ask explicitly to send RTCP */
-  g_signal_emit_by_name (internal_session, "send-rtcp-full", GST_SECOND, &ret);
+  g_signal_emit_by_name (h->internal_session,
+      "send-rtcp-full", GST_SECOND, &ret);
   /* this is FALSE due to no next RTCP check time */
   fail_unless (ret == FALSE);
 
   /* "crank" and verify RTCP now was sent */
-  g_assert (gst_test_clock_crank (testclock));
-  gst_buffer_unref (gst_harness_pull (h_rtcp));
+  session_harness_crank_clock (h);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
 
-  gst_object_unref (internal_session);
-  gst_harness_teardown (h_send);
-  gst_harness_teardown (h_rtcp);
-  gst_object_unref (clock);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
 
 GST_START_TEST (test_send_rtcp_instantly)
 {
-  GstHarness *h_rtcp;
-  GstHarness *h_send;
-  GstClock *clock = gst_test_clock_new ();
-  GstTestClock *testclock = GST_TEST_CLOCK (clock);
-  GstElement *internal_session;
+  SessionHarness *h = session_harness_new ();
   gboolean ret;
   const GstClockTime now = 123456789;
 
   /* advance the clock to "now" */
-  gst_test_clock_set_time (testclock, now);
-
-  /* use testclock as the systemclock to capture the rtcp thread waits */
-  gst_system_clock_set_default (clock);
-
-  h_rtcp =
-      gst_harness_new_with_padnames ("rtpsession", "recv_rtcp_sink",
-      "send_rtcp_src");
-  h_send =
-      gst_harness_new_with_element (h_rtcp->element, "send_rtp_sink",
-      "send_rtp_src");
-
-  g_object_get (h_rtcp->element, "internal-session", &internal_session, NULL);
+  gst_test_clock_set_time (h->testclock, now);
 
   /* verify the RTCP thread has not started */
-  fail_unless_equals_int (0, gst_test_clock_peek_id_count (testclock));
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
   /* and that no RTCP has been pushed */
-  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h_rtcp));
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
 
-  /* then ask explicitly to send RTCP */
-  g_signal_emit_by_name (internal_session, "send-rtcp-full", 0, &ret);
-  /* this is FALSE due to no next RTCP check time */
+  /* then ask explicitly to send RTCP with 0 timeout (now!) */
+  g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
+  /* this is TRUE due to ? */
   fail_unless (ret == TRUE);
 
-  /* "crank" and check the time */
-  g_assert (gst_test_clock_crank (testclock));
-  fail_unless_equals_int64 (now, gst_clock_get_time (clock));
+  /* "crank" and verify RTCP now was sent */
+  session_harness_crank_clock (h);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
 
-  /* and verify RTCP now was sent */
-  gst_buffer_unref (gst_harness_pull (h_rtcp));
+  /* and check the time is "now" */
+  fail_unless_equals_int64 (now,
+      gst_clock_get_time (GST_CLOCK (h->testclock)));
 
-  gst_object_unref (internal_session);
-  gst_harness_teardown (h_send);
-  gst_harness_teardown (h_rtcp);
-  gst_object_unref (clock);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
@@ -1218,7 +988,7 @@ feedback_rtcp_cb (GstElement * element, guint fbtype, guint fmt,
 }
 
 static void *
-send_feedback_rtcp (GstHarness * h_rtcp)
+send_feedback_rtcp (SessionHarness *h)
 {
   GstRTCPPacket packet;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
@@ -1231,54 +1001,36 @@ send_feedback_rtcp (GstHarness * h_rtcp)
   gst_rtcp_packet_fb_set_media_ssrc (&packet, 0xABE2B0B);
   gst_rtcp_packet_fb_set_media_ssrc (&packet, 0xDEADBEEF);
   gst_rtcp_buffer_unmap (&rtcp);
-  gst_harness_push (h_rtcp, buffer);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buffer));
 
   return NULL;
 }
 
 GST_START_TEST (test_feedback_rtcp_race)
 {
+  SessionHarness *h = session_harness_new ();
+
   GCond cond;
   GMutex mutex;
   FeedbackRTCPCallbackData cb_data;
   gboolean feedback_rtcp_cb_fired;
   GThread *send_rtcp_thread;
-  GstHarness *h_rtcp, *h_recv;
-  GstElement *internal_session;
-  GstTestClock *testclock;
-
-  /* use testclock as the systemclock to capture the rtcp thread waits */
-  testclock = GST_TEST_CLOCK (gst_test_clock_new ());
-  gst_test_clock_set_time (testclock, 0);
-  gst_system_clock_set_default (GST_CLOCK (testclock));
-
-  h_rtcp =
-      gst_harness_new_with_padnames ("rtpsession", "recv_rtcp_sink",
-      "send_rtcp_src");
-  h_recv =
-      gst_harness_new_with_element (h_rtcp->element, "recv_rtp_sink",
-      "recv_rtp_src");
-  g_object_get (h_rtcp->element, "internal-session", &internal_session, NULL);
 
   g_cond_init (&cond);
   g_mutex_init (&mutex);
   cb_data.cond = &cond;
   cb_data.mutex = &mutex;
   cb_data.fired = FALSE;
-  g_signal_connect (internal_session, "on-feedback-rtcp",
+  g_signal_connect (h->internal_session, "on-feedback-rtcp",
       G_CALLBACK (feedback_rtcp_cb), &cb_data);
 
   /* Push RTP buffer making external source with SSRC=0xDEADBEEF */
-  gst_harness_set_src_caps_str (h_recv,
-      "application/x-rtp,ssrc=(uint)0xDEADBEEF,"
-      "clock-rate=90000,seqnum-offset=(uint)12345");
-  gst_harness_push (h_recv,
-      generate_test_buffer (0, FALSE, 12345, 0, 0xDEADBEEF));
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtp (h,
+          generate_test_buffer (0, 0xDEADBEEF)));
 
   /* Push feedback RTCP with media SSRC=0xDEADBEEF */
-  gst_harness_set_src_caps_str (h_rtcp, "application/x-rtcp");
   send_rtcp_thread =
-      g_thread_new (NULL, (GThreadFunc) send_feedback_rtcp, h_rtcp);
+      g_thread_new (NULL, (GThreadFunc) send_feedback_rtcp, h);
 
   /* Waiting for feedback RTCP callback to fire */
   feedback_rtcp_cb_fired = FALSE;
@@ -1291,21 +1043,14 @@ GST_START_TEST (test_feedback_rtcp_race)
   /* While send_rtcp_thread thread is waiting for our signal
      advance the clock by 30sec triggering removal of 0xDEADBEEF,
      as if the source was inactive for too long */
-  gst_test_clock_wait_for_next_pending_id (testclock, NULL);
-  gst_test_clock_advance_time (testclock, GST_SECOND * 30);
-  gst_clock_id_unref (gst_test_clock_process_next_clock_id (testclock));
-  gst_buffer_unref (gst_harness_pull (h_rtcp));
+  session_harness_advance_and_crank (h, GST_SECOND * 30);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
 
   /* Let send_rtcp_thread thread to finish */
   g_cond_signal (&cond);
   g_thread_join (send_rtcp_thread);
-  gst_harness_teardown (h_rtcp);
-  gst_harness_teardown (h_recv);
-  gst_object_unref (testclock);
-  gst_object_unref (internal_session);
 
-  /* Reset to default system clock */
-  gst_system_clock_set_default (NULL);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
