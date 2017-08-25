@@ -1418,6 +1418,37 @@ GST_START_TEST (test_creating_srrr)
 
 GST_END_TEST;
 
+GST_START_TEST (test_send_rtcp_instantly)
+{
+  SessionHarness *h = session_harness_new ();
+  gboolean ret;
+  const GstClockTime now = 123456789;
+
+  /* advance the clock to "now" */
+  gst_test_clock_set_time (h->testclock, now);
+
+  /* verify the RTCP thread has not started */
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
+  /* and that no RTCP has been pushed */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
+
+  /* then ask explicitly to send RTCP with 0 timeout (now!) */
+  g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
+  /* this is TRUE due to ? */
+  fail_unless (ret == TRUE);
+
+  /* "crank" and verify RTCP now was sent */
+  session_harness_crank_clock (h);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+
+  /* and check the time is "now" */
+  fail_unless_equals_int64 (now, gst_clock_get_time (GST_CLOCK (h->testclock)));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -1443,6 +1474,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
   tcase_add_test (tc_chain, test_change_sent_sdes);
   tcase_add_test (tc_chain, test_creating_srrr);
+  tcase_add_test (tc_chain, test_send_rtcp_instantly);
   return s;
 }
 
