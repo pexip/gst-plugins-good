@@ -213,7 +213,8 @@ typedef struct
   GstHarness *rtcp_h;
 
   GstElement *session;
-  GstClock *testclock;
+  GObject *internal_session;
+  GstTestClock *testclock;
   GstCaps *caps;
 } SessionHarness;
 
@@ -230,11 +231,11 @@ session_harness_new (void)
   SessionHarness *h = g_new0 (SessionHarness, 1);
   h->caps = generate_caps ();
 
-  h->testclock = gst_test_clock_new ();
-  gst_system_clock_set_default (h->testclock);
+  h->testclock = GST_TEST_CLOCK_CAST (gst_test_clock_new ());
+  gst_system_clock_set_default (GST_CLOCK_CAST (h->testclock));
 
   h->session = gst_element_factory_make ("rtpsession", NULL);
-  gst_element_set_clock (h->session, h->testclock);
+  gst_element_set_clock (h->session, GST_CLOCK_CAST (h->testclock));
 
   h->send_rtp_h = gst_harness_new_with_element (h->session,
       "send_rtp_sink", "send_rtp_src");
@@ -251,6 +252,8 @@ session_harness_new (void)
   g_signal_connect (h->session, "request-pt-map",
       (GCallback) _pt_map_requested, h);
 
+  g_object_get (h->session, "internal-session", &h->internal_session, NULL);
+
   return h;
 }
 
@@ -264,6 +267,7 @@ session_harness_free (SessionHarness * h)
   gst_harness_teardown (h->recv_rtp_h);
   gst_harness_teardown (h->send_rtp_h);
 
+  g_object_unref (h->internal_session);
   gst_object_unref (h->session);
   g_free (h);
 }
@@ -289,7 +293,26 @@ session_harness_pull_rtcp (SessionHarness * h)
 static void
 session_harness_crank_clock (SessionHarness * h)
 {
-  gst_test_clock_crank (GST_TEST_CLOCK_CAST (h->testclock));
+  gst_test_clock_crank (h->testclock);
+}
+
+static gboolean
+session_harness_advance_and_crank (SessionHarness * h,
+    GstClockTime delta)
+{
+  GstClockID res, pending;
+  gboolean result;
+  gst_test_clock_wait_for_next_pending_id (h->testclock, &pending);
+  gst_test_clock_advance_time (h->testclock, delta);
+  res = gst_test_clock_process_next_clock_id (h->testclock);
+  if (res == pending)
+    result = TRUE;
+  else
+    result = FALSE;
+  if (res)
+    gst_clock_id_unref (res);
+  gst_clock_id_unref (pending);
+  return result;
 }
 
 static void
@@ -297,7 +320,7 @@ session_harness_produce_rtcp (SessionHarness * h, gint num_rtcp_packets)
 {
   /* due to randomness in rescheduling of RTCP timeout, we need to
      keep cranking until we have the desired amount of packets */
-  while (gst_harness_buffers_in_queue (h->rtcp_h) != num_rtcp_packets)
+  while (gst_harness_buffers_in_queue (h->rtcp_h) < num_rtcp_packets)
     session_harness_crank_clock (h);
 }
 
@@ -362,7 +385,6 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
 {
   SessionHarness *h = session_harness_new ();
   GstFlowReturn res;
-  GObject *internal_session;
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
@@ -370,8 +392,7 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
   guint32 ssrc;
   GHashTable *rb_ssrcs, *tmp_set;
 
-  g_object_get (h->session, "internal-session", &internal_session, NULL);
-  g_object_set (internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
   for (i = 0; i < 2; i++) {     /* cycles between RR reports */
     for (j = 0; j < 5; j++) {   /* packets per ssrc */
@@ -385,8 +406,6 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
     }
   }
 
-  session_harness_produce_rtcp (h, 2);
-
   rb_ssrcs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
       (GDestroyNotify) g_hash_table_unref);
 
@@ -395,6 +414,7 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
     guint expected_rb_count = (i < 1) ? GST_RTCP_MAX_RB_COUNT :
         (35 - GST_RTCP_MAX_RB_COUNT);
 
+    session_harness_produce_rtcp (h, 1);
     buf = session_harness_pull_rtcp (h);
     g_assert (buf != NULL);
     fail_unless (gst_rtcp_buffer_validate (buf));
@@ -512,10 +532,9 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
   rb_ssrcs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
       (GDestroyNotify) g_hash_table_unref);
 
-  session_harness_produce_rtcp (h, 2);
-
   /* verify the rtcp packets */
   for (i = 0; i < 2; i++) {
+    session_harness_produce_rtcp (h, 1);
     buf = session_harness_pull_rtcp (h);
     g_assert (buf != NULL);
     g_assert (gst_rtcp_buffer_validate (buf));
@@ -566,176 +585,134 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
 
 GST_END_TEST;
 
-static void
-crank_rtcp_thread (TestData * data, GstClockTime * time, GstClockID * id)
-{
-  gint queue_length;
-  GstClockID *tid;
-
-  queue_length = g_async_queue_length (data->rtcp_queue);
-  do {
-    *time = gst_clock_id_get_time (*id);
-    GST_DEBUG ("Advancing time to %" GST_TIME_FORMAT, GST_TIME_ARGS (*time));
-    if (*time > gst_clock_get_time (data->clock))
-      gst_test_clock_set_time (GST_TEST_CLOCK (data->clock), *time);
-    tid = gst_test_clock_process_next_clock_id (GST_TEST_CLOCK (data->clock));
-    fail_unless_equals_pointer (tid, *id);
-
-    gst_clock_id_unref (tid);
-    gst_clock_id_unref (*id);
-    *id = NULL;
-
-    /* wait for the RTCP pad thread to output its data
-     * and start waiting on the next timeout */
-    gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data->clock), id);
-
-    /* and retry as long as there are no new RTCP packets out,
-     * because the RTCP thread may randomly decide to reschedule
-     * the RTCP timeout for later */
-  } while (g_async_queue_length (data->rtcp_queue) == queue_length);
-}
-
 GST_START_TEST (test_internal_sources_timeout)
 {
-  TestData data;
-  GstClockID id;
-  GstClockTime time;
-  GObject *internal_session;
+  SessionHarness *h = session_harness_new ();
   guint internal_ssrc;
   guint32 ssrc;
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
+  GstRTCPType rtcp_type;
   GstFlowReturn res;
   gint i, j;
   GstCaps *caps;
   gboolean ret;
+  gboolean seen_bye;
 
-  setup_testharness (&data, TRUE);
-  g_object_get (data.session, "internal-session", &internal_session, NULL);
-  g_object_set (internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
   /* ask explicitly to send RTCP since we have not started the internal RTCP
      thread yet */
-  g_signal_emit_by_name (internal_session, "send-rtcp-full", GST_SECOND, &ret);
+  g_signal_emit_by_name (h->internal_session, "send-rtcp-full", GST_SECOND, &ret);
   fail_unless (ret == FALSE);
 
-  /* only the RTCP thread waits on the clock */
-  gst_test_clock_wait_for_next_pending_id (GST_TEST_CLOCK (data.clock), &id);
-
-  /* crank the RTCP pad thread until it creates a RR for its internal-ssrc
-   * source, since we have not pushed any RTP packets and it doesn't have
-   * any other source available */
-  crank_rtcp_thread (&data, &time, &id);
-
-  g_object_get (internal_session, "internal-ssrc", &internal_ssrc, NULL);
-  g_assert_cmpint (internal_ssrc, ==, 0xDEADBEEF);
+  g_object_get (h->internal_session, "internal-ssrc", &internal_ssrc, NULL);
+  fail_unless_equals_int (0xDEADBEEF, internal_ssrc);
 
   /* verify that rtpsession has sent RR for an internally-created
    * RTPSource that is using the internal-ssrc */
-  buf = g_async_queue_pop (data.rtcp_queue);
-  g_assert (buf != NULL);
-  g_assert (gst_rtcp_buffer_validate (buf));
+  session_harness_crank_clock (h);
+  buf = session_harness_pull_rtcp (h);
+
+  fail_unless (buf != NULL);
+  fail_unless (gst_rtcp_buffer_validate (buf));
   gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
-  g_assert (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
-  g_assert_cmpint (gst_rtcp_packet_get_type (&rtcp_packet), ==,
-      GST_RTCP_TYPE_RR);
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+  fail_unless_equals_int (GST_RTCP_TYPE_RR,
+      gst_rtcp_packet_get_type (&rtcp_packet));
   ssrc = gst_rtcp_packet_rr_get_ssrc (&rtcp_packet);
-  g_assert_cmpint (ssrc, ==, internal_ssrc);
+  fail_unless_equals_int (ssrc, internal_ssrc);
   gst_rtcp_buffer_unmap (&rtcp);
   gst_buffer_unref (buf);
 
   /* ok, now let's push some RTP packets */
-  caps =
-      gst_caps_new_simple ("application/x-rtp", "ssrc", G_TYPE_UINT, 0x01BADBAD,
-      NULL);
-  gst_pad_set_caps (data.src, caps);
-  gst_caps_unref (caps);
+  caps = gst_caps_new_simple ("application/x-rtp",
+      "ssrc", G_TYPE_UINT, 0x01BADBAD, NULL);
+  gst_harness_set_src_caps (h->send_rtp_h, caps);
 
   for (i = 1; i < 4; i++) {
-    gst_test_clock_advance_time (GST_TEST_CLOCK (data.clock),
-        200 * GST_MSECOND);
-    buf =
-        generate_test_buffer (time + i * 200 * GST_MSECOND, FALSE, i, i * 200,
+    buf = generate_test_buffer (i * 200 * GST_MSECOND, FALSE, i, i * 200,
         0x01BADBAD);
-    res = gst_pad_push (data.src, buf);
-    fail_unless (res == GST_FLOW_OK || res == GST_FLOW_FLUSHING);
+    res = session_harness_send_rtp (h, buf);
+    fail_unless_equals_int (GST_FLOW_OK, res);
   }
 
   /* internal ssrc must have changed already */
-  g_object_get (internal_session, "internal-ssrc", &internal_ssrc, NULL);
-  g_assert_cmpint (ssrc, !=, internal_ssrc);
-  g_assert_cmpint (internal_ssrc, ==, 0x01BADBAD);
-
-  /* wait for SR */
-  crank_rtcp_thread (&data, &time, &id);
+  g_object_get (h->internal_session, "internal-ssrc", &internal_ssrc, NULL);
+  fail_unless (internal_ssrc != ssrc);
+  fail_unless_equals_int (0x01BADBAD, internal_ssrc);
 
   /* verify SR and RR */
   j = 0;
   for (i = 0; i < 2; i++) {
-    buf = g_async_queue_pop (data.rtcp_queue);
+    session_harness_produce_rtcp (h, 1);
+    buf = session_harness_pull_rtcp (h);
     g_assert (buf != NULL);
-    g_assert (gst_rtcp_buffer_validate (buf));
+    fail_unless (gst_rtcp_buffer_validate (buf));
     gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
-    g_assert (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
-    if (gst_rtcp_packet_get_type (&rtcp_packet) == GST_RTCP_TYPE_SR) {
+    fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+    rtcp_type = gst_rtcp_packet_get_type (&rtcp_packet);
+
+    if (rtcp_type == GST_RTCP_TYPE_SR) {
       gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, NULL, NULL,
           NULL);
-      g_assert_cmpint (ssrc, ==, internal_ssrc);
-      g_assert_cmpint (ssrc, ==, 0x01BADBAD);
+      fail_unless_equals_int (internal_ssrc, ssrc);
+      fail_unless_equals_int (0x01BADBAD, ssrc);
       j |= 0x1;
-    } else if (gst_rtcp_packet_get_type (&rtcp_packet) == GST_RTCP_TYPE_RR) {
+    } else if (rtcp_type == GST_RTCP_TYPE_RR) {
       ssrc = gst_rtcp_packet_rr_get_ssrc (&rtcp_packet);
-      g_assert_cmpint (ssrc, !=, internal_ssrc);
-      g_assert_cmpint (ssrc, ==, 0xDEADBEEF);
+      fail_unless (internal_ssrc != ssrc);
+      fail_unless_equals_int (0xDEADBEEF, ssrc);
       j |= 0x2;
     }
     gst_rtcp_buffer_unmap (&rtcp);
     gst_buffer_unref (buf);
   }
-  g_assert_cmpint (j, ==, 0x3); /* verify we got both SR and RR */
+  fail_unless_equals_int (0x3, j); /* verify we got both SR and RR */
 
   /* go 30 seconds in the future and observe both sources timing out:
    * 0xDEADBEEF -> BYE, 0x01BADBAD -> becomes receiver only */
-  gst_test_clock_advance_time (GST_TEST_CLOCK (data.clock), 30 * GST_SECOND);
-  crank_rtcp_thread (&data, &time, &id);
+  fail_unless (session_harness_advance_and_crank (h, 30 * GST_SECOND));
 
   /* verify BYE and RR */
   j = 0;
-  for (i = 0; i < 2; i++) {
-    buf = g_async_queue_pop (data.rtcp_queue);
-    g_assert (buf != NULL);
-    g_assert (gst_rtcp_buffer_validate (buf));
+  seen_bye = FALSE;
+  while (!seen_bye) {
+    session_harness_produce_rtcp (h, 1);
+    buf = session_harness_pull_rtcp (h);
+    fail_unless (buf != NULL);
+    fail_unless (gst_rtcp_buffer_validate (buf));
     gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+    fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+    rtcp_type = gst_rtcp_packet_get_type (&rtcp_packet);
 
-    g_assert (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
-    g_assert_cmpint (gst_rtcp_packet_get_type (&rtcp_packet), ==,
-        GST_RTCP_TYPE_RR);
-    ssrc = gst_rtcp_packet_rr_get_ssrc (&rtcp_packet);
-    if (ssrc == 0x01BADBAD) {
-      j |= 0x1;
-      g_assert_cmpint (ssrc, ==, internal_ssrc);
-      /* 2 => RR, SDES. There is no BYE here */
-      g_assert_cmpint (gst_rtcp_buffer_get_packet_count (&rtcp), ==, 2);
-    } else if (ssrc == 0xDEADBEEF) {
-      j |= 0x2;
-      g_assert_cmpint (ssrc, !=, internal_ssrc);
-      /* 3 => RR, SDES, BYE */
-      g_assert_cmpint (gst_rtcp_buffer_get_packet_count (&rtcp), ==, 3);
-      g_assert (gst_rtcp_packet_move_to_next (&rtcp_packet));
-      g_assert (gst_rtcp_packet_move_to_next (&rtcp_packet));
-      g_assert_cmpint (gst_rtcp_packet_get_type (&rtcp_packet), ==,
-          GST_RTCP_TYPE_BYE);
+    if (rtcp_type == GST_RTCP_TYPE_RR) {
+      ssrc = gst_rtcp_packet_rr_get_ssrc (&rtcp_packet);
+      if (ssrc == 0x01BADBAD) {
+        j |= 0x1;
+        fail_unless_equals_int (internal_ssrc, ssrc);
+        /* 2 => RR, SDES. There is no BYE here */
+        fail_unless_equals_int (2, gst_rtcp_buffer_get_packet_count (&rtcp));
+      } else if (ssrc == 0xDEADBEEF) {
+        j |= 0x2;
+        g_assert_cmpint (ssrc, !=, internal_ssrc);
+        /* 3 => RR, SDES, BYE */
+        if (gst_rtcp_buffer_get_packet_count (&rtcp) == 3) {
+          fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+          fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+          fail_unless_equals_int (GST_RTCP_TYPE_BYE,
+              gst_rtcp_packet_get_type (&rtcp_packet));
+          seen_bye = TRUE;
+        }
+      }
     }
-
     gst_rtcp_buffer_unmap (&rtcp);
     gst_buffer_unref (buf);
   }
-  g_assert_cmpint (j, ==, 0x3); /* verify we got both BYE and RR */
-  gst_clock_id_unref (id);
+  fail_unless_equals_int (0x3, j); /* verify we got both BYE and RR */
 
-  g_object_unref (internal_session);
-  destroy_testharness (&data);
+  session_harness_free (h);
 }
 
 GST_END_TEST;
