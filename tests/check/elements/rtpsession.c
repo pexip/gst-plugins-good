@@ -777,6 +777,45 @@ GST_START_TEST (test_creating_srrr)
 
 GST_END_TEST;
 
+GST_START_TEST (test_dont_send_rtcp_while_idle)
+{
+  SessionHarness *h = session_harness_new ();
+
+  /* verify the RTCP thread has not started */
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
+  /* and that no RTCP has been pushed */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_send_rtcp_when_signalled)
+{
+  SessionHarness *h = session_harness_new ();
+  gboolean ret;
+
+  /* verify the RTCP thread has not started */
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
+  /* and that no RTCP has been pushed */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
+
+  /* then ask explicitly to send RTCP */
+  g_signal_emit_by_name (h->internal_session,
+      "send-rtcp-full", GST_SECOND, &ret);
+  /* this is FALSE due to no next RTCP check time */
+  fail_unless (ret == FALSE);
+
+  /* "crank" and verify RTCP now was sent */
+  session_harness_crank_clock (h);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -793,6 +832,8 @@ rtpsession_suite (void)
 
   tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet);
   tcase_add_test (tc_chain, test_creating_srrr);
+  tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle);
+  tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
   return s;
 }
 
