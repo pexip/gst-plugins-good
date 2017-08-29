@@ -33,10 +33,6 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_vp8_depay_debug);
 #define GST_CAT_DEFAULT gst_rtp_vp8_depay_debug
 
 static void gst_rtp_vp8_depay_dispose (GObject * object);
-static void gst_rtp_vp8_depay_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec);
-static void gst_rtp_vp8_depay_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec);
 static GstBuffer *gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depayload,
     GstRTPBuffer * rtp);
 static GstStateChangeReturn gst_rtp_vp8_depay_change_state (GstElement *
@@ -63,16 +59,54 @@ GST_STATIC_PAD_TEMPLATE ("sink",
         "media = (string) \"video\","
         "encoding-name = (string) { \"VP8\", \"VP8-DRAFT-IETF-01\" }"));
 
-#define DEFAULT_WAIT_FOR_KEYFRAME FALSE
-
 enum
 {
   PROP_0,
   PROP_WAIT_FOR_KEYFRAME
+  PROP_HIDE_PICTURE_ID_GAP,
 };
 
 #define PICTURE_ID_NONE (UINT_MAX)
 #define IS_PICTURE_ID_15BITS(pid) (((guint)(pid) & 0x8000) != 0)
+
+#define DEFAULT_WAIT_FOR_KEYFRAME FALSE
+#define DEFAULT_HIDE_PICTURE_ID_GAP FALSE
+
+static void
+gst_rtp_vp8_depay_set_property (GObject * object, guint prop_id,
+    const GValue * value, GParamSpec * pspec)
+{
+  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY_CAST (object);
+  switch (prop_id) {
+    case PROP_WAIT_FOR_KEYFRAME:
+      self->wait_for_keyframe = g_value_get_boolean (value);
+      break;
+    case PROP_HIDE_PICTURE_ID_GAP:
+      self->hide_picture_id_gap = g_value_get_boolean (value);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
+
+static void
+gst_rtp_vp8_depay_get_property (GObject * object, guint prop_id,
+    GValue * value, GParamSpec * pspec)
+{
+  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY_CAST (object);
+  switch (prop_id) {
+    case PROP_WAIT_FOR_KEYFRAME:
+      g_value_set_boolean (value, self->wait_for_keyframe);
+      break;
+    case PROP_HIDE_PICTURE_ID_GAP:
+      g_value_set_boolean (value, self->hide_picture_id_gap);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+      break;
+  }
+}
 
 static void
 gst_rtp_vp8_depay_init (GstRtpVP8Depay * self)
@@ -104,17 +138,23 @@ gst_rtp_vp8_depay_class_init (GstRtpVP8DepayClass * gst_rtp_vp8_depay_class)
   object_class->set_property = gst_rtp_vp8_depay_set_property;
   object_class->get_property = gst_rtp_vp8_depay_get_property;
 
+  element_class->change_state = gst_rtp_vp8_depay_change_state;
+
+  depay_class->process_rtp_packet = gst_rtp_vp8_depay_process;
+  depay_class->handle_event = gst_rtp_vp8_depay_handle_event;
+  depay_class->packet_lost = gst_rtp_vp8_depay_packet_lost;
+
   g_object_class_install_property (object_class, PROP_WAIT_FOR_KEYFRAME,
       g_param_spec_boolean ("wait-for-keyframe", "Wait for Keyframe",
           "Wait for the next keyframe after packet loss",
           DEFAULT_WAIT_FOR_KEYFRAME,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-  element_class->change_state = gst_rtp_vp8_depay_change_state;
-
-  depay_class->process_rtp_packet = gst_rtp_vp8_depay_process;
-  depay_class->handle_event = gst_rtp_vp8_depay_handle_event;
-  depay_class->packet_lost = gst_rtp_vp8_depay_packet_lost;
+  g_object_class_install_property (object_class, PROP_HIDE_PICTURE_ID_GAP,
+      g_param_spec_boolean ("hide-picture-id-gap", "Hide Picture ID Gap",
+          "Wether to trigger a key-unit request when there is a gap in "
+          "the picture ID", DEFAULT_HIDE_PICTURE_ID_GAP,
+          G_PARAM_CONSTRUCT | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   GST_DEBUG_CATEGORY_INIT (gst_rtp_vp8_depay_debug, "rtpvp8depay", 0,
       "VP8 Video RTP Depayloader");
@@ -135,45 +175,13 @@ gst_rtp_vp8_depay_dispose (GObject * object)
     G_OBJECT_CLASS (gst_rtp_vp8_depay_parent_class)->dispose (object);
 }
 
-static void
-gst_rtp_vp8_depay_set_property (GObject * object, guint prop_id,
-    const GValue * value, GParamSpec * pspec)
-{
-  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY (object);
-
-  switch (prop_id) {
-    case PROP_WAIT_FOR_KEYFRAME:
-      self->wait_for_keyframe = g_value_get_boolean (value);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
-}
-
-static void
-gst_rtp_vp8_depay_get_property (GObject * object, guint prop_id,
-    GValue * value, GParamSpec * pspec)
-{
-  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY (object);
-
-  switch (prop_id) {
-    case PROP_WAIT_FOR_KEYFRAME:
-      g_value_set_boolean (value, self->wait_for_keyframe);
-      break;
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
-      break;
-  }
-}
-
 static gint
 picture_id_compare (guint16 id0, guint16 id1)
 {
   guint shift = 16 - (IS_PICTURE_ID_15BITS (id1) ? 15 : 7);
   id0 = id0 << shift;
   id1 = id1 << shift;
-  return ((gint16)(id1 - id0)) >> shift;
+  return ((gint16) (id1 - id0)) >> shift;
 }
 
 static void
@@ -218,7 +226,7 @@ send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
   if (self->last_lost_event) {
     if (fwd_last_lost_event) {
       GST_DEBUG_OBJECT (self, "Forwarding lost event "
-          "(picids 0x%x 0x%x, reason \"%s\"): %"GST_PTR_FORMAT,
+          "(picids 0x%x 0x%x, reason \"%s\"): %" GST_PTR_FORMAT,
           self->last_picture_id, new_picture_id, reason, self->last_lost_event);
       GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
           ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
@@ -238,17 +246,18 @@ send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
           gst_structure_new ("GstRTPPacketLost",
               "timestamp", G_TYPE_UINT64, lost_event_timestamp,
               "duration", G_TYPE_UINT64, 0,
-              "no-packet-loss", G_TYPE_BOOLEAN, TRUE, NULL));
+              "no-packet-loss", G_TYPE_BOOLEAN, self->hide_picture_id_gap,
+              NULL));
 
       GST_DEBUG_OBJECT (self, "Pushing lost event "
-          "(picids 0x%x 0x%x, reason \"%s\"): %"GST_PTR_FORMAT,
+          "(picids 0x%x 0x%x, reason \"%s\"): %" GST_PTR_FORMAT,
           self->last_picture_id, new_picture_id, reason, lost_event);
       GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
-          ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
-          lost_event);
+          ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self), lost_event);
       gst_event_unref (lost_event);
     } else {
-      GST_WARNING_OBJECT (self, "Can't create lost event with invalid timestmap");
+      GST_WARNING_OBJECT (self,
+          "Can't create lost event with invalid timestmap");
     }
   }
 }
@@ -256,7 +265,7 @@ send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
 static GstBuffer *
 gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
 {
-  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY (depay);
+  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY_CAST (depay);
   GstBuffer *payload;
   guint8 *data;
   guint hdrsize = 1;
@@ -412,7 +421,7 @@ too_small:
 static GstStateChangeReturn
 gst_rtp_vp8_depay_change_state (GstElement * element, GstStateChange transition)
 {
-  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY (element);
+  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY_CAST (element);
 
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_PAUSED:
@@ -440,7 +449,7 @@ gst_rtp_vp8_depay_change_state (GstElement * element, GstStateChange transition)
 static gboolean
 gst_rtp_vp8_depay_handle_event (GstRTPBaseDepayload * depay, GstEvent * event)
 {
-  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY (depay);
+  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY_CAST (depay);
 
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_FLUSH_STOP:
@@ -466,7 +475,7 @@ gst_rtp_vp8_depay_handle_event (GstRTPBaseDepayload * depay, GstEvent * event)
 static gboolean
 gst_rtp_vp8_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
 {
-  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY (depay);
+  GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY_CAST (depay);
   if (self->stop_lost_events) {
     GST_DEBUG_OBJECT (depay, "Stopping lost event %" GST_PTR_FORMAT, event);
     if (self->last_lost_event)
