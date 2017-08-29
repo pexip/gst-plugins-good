@@ -38,6 +38,8 @@ G_BEGIN_DECLS
 #define GST_RTP_VP8_DEPAY_GET_CLASS(obj) \
   (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_RTP_VP8_DEPAY, \
     GstRtpVP8DepayClass))
+#define GST_RTP_VP8_DEPAY_CAST(obj) ((GstRtpVP8Depay *)(obj))
+
 typedef struct _GstRtpVP8Depay GstRtpVP8Depay;
 typedef struct _GstRtpVP8DepayClass GstRtpVP8DepayClass;
 
@@ -59,6 +61,9 @@ struct _GstRtpVP8Depay
   gint last_width;
   gint last_height;
   guint last_picture_id;
+
+  /* properties */
+  gboolean hide_picture_id_gap;
 };
 
 GType gst_rtp_vp8_depay_get_type (void);
