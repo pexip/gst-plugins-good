@@ -1191,9 +1191,9 @@ update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
   if (pinfo->is_list ||
       !GST_BUFFER_FLAG_IS_SET (pinfo->data, GST_BUFFER_FLAG_GAP)) {
     /* skip stats if gap flag is set on buffer */
-    src->stats.octets_received += pinfo->payload_len;
-    src->stats.bytes_received += pinfo->bytes;
-    src->stats.packets_received++;
+    stats->octets_received += pinfo->payload_len;
+    stats->bytes_received += pinfo->bytes;
+    stats->packets_received++;
   }
 
   /* for the bitrate estimation */
