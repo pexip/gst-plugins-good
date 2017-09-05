@@ -1051,6 +1051,207 @@ GST_START_TEST (test_feedback_rtcp_race)
 
 GST_END_TEST;
 
+static void
+copy_stats (GObject * object, GParamSpec * spec, GstStructure ** stats)
+{
+  (void) spec;
+  g_object_get (object, "stats", stats, NULL);
+}
+
+static GstCaps *
+rtpsession_request_pt_map (GstElement * element, guint pt, GstCaps * caps)
+{
+  (void) element;
+  (void) pt;
+  return gst_caps_copy (caps);
+}
+
+GST_START_TEST (test_stats_transmission_duration)
+{
+  GstTestClock *testclock = GST_TEST_CLOCK (gst_test_clock_new ());
+  GstElement *rtpsession;
+  GstHarness *h, *h_rtp;
+  GstStructure *stats = NULL;
+  GValueArray *source_stats;
+  gboolean stats_verified = FALSE;
+  GstCaps *caps = generate_caps();
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  gst_system_clock_set_default (GST_CLOCK (testclock));
+
+  h = gst_harness_new_with_padnames ("rtpsession",
+      "recv_rtcp_sink", "send_rtcp_src");
+  h_rtp = gst_harness_new_with_element (h->element,
+      "recv_rtp_sink", "recv_rtp_src");
+
+  g_signal_connect (h->element, "notify::stats", G_CALLBACK (copy_stats), &stats);
+  g_signal_connect (h->element, "request-pt-map", G_CALLBACK (rtpsession_request_pt_map), caps);
+
+  /* Set probation=1 so that first packet is pushed through immediately. Makes
+   * test simpler. */
+  g_object_get (h->element, "internal-session", &rtpsession, NULL);
+  g_object_set (rtpsession, "probation", 1, NULL);
+
+  gst_harness_set_src_caps_str (h_rtp, "application/x-rtp");
+
+  /* first frame has transmission duration of 20 ms */
+  gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (0 * GST_MSECOND,
+          0, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  gst_test_clock_set_time (testclock, 10 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (10 * GST_MSECOND,
+          1, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  gst_test_clock_set_time (testclock, 20 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (20 * GST_MSECOND,
+          2, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  /* second frame has transmission duration of 0 ms */
+  gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (100 * GST_MSECOND,
+          3, 1 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  /* need third frame to register that second frame is finished */
+  gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (200 * GST_MSECOND,
+          4, 2 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  /* crank to get the stats */
+  gst_test_clock_crank (testclock);
+  while (stats == NULL)
+    g_thread_yield ();
+  fail_unless (stats != NULL);
+
+  source_stats = g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
+  fail_unless (source_stats);
+
+  for (guint i = 0; i < source_stats->n_values; i++) {
+    GstStructure *s = g_value_get_boxed (g_value_array_get_nth (source_stats, i));
+    gboolean internal;
+    gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
+    if (!internal) {
+      GstClockTime avg_tdur, max_tdur;
+      gst_structure_get (s,
+          "avg-frame-transmission-duration", G_TYPE_UINT64, &avg_tdur,
+          "max-frame-transmission-duration", G_TYPE_UINT64, &max_tdur, NULL);
+      fail_unless_equals_int (max_tdur, 20 * GST_MSECOND);
+      fail_unless_equals_int (avg_tdur, (0 + 1023 * 20 * GST_MSECOND) / 1024);
+      stats_verified = TRUE;
+      break;
+    }
+  }
+  fail_unless (stats_verified);
+
+  gst_structure_free (stats);
+
+  gst_caps_unref (caps);
+  gst_object_unref (testclock);
+  gst_object_unref (rtpsession);
+  gst_harness_teardown (h_rtp);
+  gst_harness_teardown (h);
+
+  /* Reset to default system clock */
+  gst_system_clock_set_default (NULL);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_stats_transmission_duration_reordering)
+{
+  GstTestClock *testclock = GST_TEST_CLOCK (gst_test_clock_new ());
+  GstElement *rtpsession;
+  GstHarness *h, *h_rtp;
+  GstStructure *stats = NULL;
+  GValueArray *source_stats;
+  gboolean stats_verified = FALSE;
+  GstCaps *caps = generate_caps();
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  gst_system_clock_set_default (GST_CLOCK (testclock));
+
+  h = gst_harness_new_with_padnames ("rtpsession",
+      "recv_rtcp_sink", "send_rtcp_src");
+  h_rtp = gst_harness_new_with_element (h->element,
+      "recv_rtp_sink", "recv_rtp_src");
+
+  g_signal_connect (h->element, "notify::stats", G_CALLBACK (copy_stats), &stats);
+  g_signal_connect (h->element, "request-pt-map", G_CALLBACK (rtpsession_request_pt_map), caps);
+
+  /* Set probation=1 so that first packet is pushed through immediately. Makes
+   * test simpler. */
+  g_object_get (h->element, "internal-session", &rtpsession, NULL);
+  g_object_set (rtpsession, "probation", 1, NULL);
+
+  gst_harness_set_src_caps_str (h_rtp, "application/x-rtp");
+
+  /* first frame has transmission duration of 20 ms */
+  gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (0 * GST_MSECOND,
+          0, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  gst_test_clock_set_time (testclock, 50 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (50 * GST_MSECOND,
+          1, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  /* second frame comes before last packet of previous frame  */
+  gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (100 * GST_MSECOND,
+          3, 1 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  /* last packet of first frame arrives */
+  gst_test_clock_set_time (testclock, 110 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (110 * GST_MSECOND,
+          2, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  /* need third frame to register that second frame is finished */
+  gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_full (200 * GST_MSECOND,
+          4, 2 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+
+  /* crank to get the stats */
+  gst_test_clock_crank (testclock);
+  while (stats == NULL)
+    g_thread_yield ();
+  fail_unless (stats != NULL);
+
+  source_stats = g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
+  fail_unless (source_stats);
+
+  for (guint i = 0; i < source_stats->n_values; i++) {
+    GstStructure *s = g_value_get_boxed (g_value_array_get_nth (source_stats, i));
+    gboolean internal;
+    gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
+    if (!internal) {
+      GstClockTime avg_tdur, max_tdur;
+      gst_structure_get (s,
+          "avg-frame-transmission-duration", G_TYPE_UINT64, &avg_tdur,
+          "max-frame-transmission-duration", G_TYPE_UINT64, &max_tdur, NULL);
+      /* the reordered packet will be ignored by stats becuase of
+       * simplicity */
+      fail_unless_equals_int (max_tdur, 50 * GST_MSECOND);
+      fail_unless_equals_int (avg_tdur, (0 + 1023 * 50 * GST_MSECOND) / 1024);
+      stats_verified = TRUE;
+      break;
+    }
+  }
+  fail_unless (stats_verified);
+
+  gst_structure_free (stats);
+
+  gst_caps_unref (caps);
+  gst_object_unref (testclock);
+  gst_object_unref (rtpsession);
+  gst_harness_teardown (h_rtp);
+  gst_harness_teardown (h);
+
+  /* Reset to default system clock */
+  gst_system_clock_set_default (NULL);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 rtpsession_suite (void)
 {
@@ -1072,6 +1273,10 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
   tcase_add_test (tc_chain, test_send_rtcp_instantly);
   tcase_add_test (tc_chain, test_feedback_rtcp_race);
+
+  tcase_add_test (tc_chain, test_stats_transmission_duration);
+  tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
+
   return s;
 }
 
