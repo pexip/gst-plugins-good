@@ -73,6 +73,9 @@ typedef struct
 {
   vpx_image_t *image;
   GList *invisible;
+  guint layer_id;
+  guint8 tl0picidx;
+  gboolean layer_sync;
 } GstVP8EncUserData;
 
 static void
@@ -106,6 +109,12 @@ static GstFlowReturn gst_vp8_enc_handle_invisible_frame_buffer (GstVPXEnc * enc,
     void *user_data, GstBuffer * buffer);
 static void gst_vp8_enc_set_frame_user_data (GstVPXEnc * enc,
     GstVideoCodecFrame * frame, vpx_image_t * image);
+static void gst_vp8_enc_apply_frame_temporal_settings (GstVPXEnc * enc,
+    GstVideoCodecFrame * frame, guint layer_id, guint8 tl0picidx,
+    gboolean layer_sync);
+static void gst_vp8_enc_get_frame_temporal_settings (GstVPXEnc * enc,
+    GstVideoCodecFrame * frame, guint * layer_id, guint8 * tl0picidx,
+    gboolean * layer_sync);
 
 static GstFlowReturn gst_vp8_enc_pre_push (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame);
@@ -166,6 +175,10 @@ gst_vp8_enc_class_init (GstVP8EncClass * klass)
   vpx_encoder_class->handle_invisible_frame_buffer =
       gst_vp8_enc_handle_invisible_frame_buffer;
   vpx_encoder_class->set_frame_user_data = gst_vp8_enc_set_frame_user_data;
+  vpx_encoder_class->apply_frame_temporal_settings =
+      gst_vp8_enc_apply_frame_temporal_settings;
+  vpx_encoder_class->get_frame_temporal_settings =
+      gst_vp8_enc_get_frame_temporal_settings;
 
   GST_DEBUG_CATEGORY_INIT (gst_vp8enc_debug, "vp8enc", 0, "VP8 Encoder");
 }
@@ -336,6 +349,52 @@ gst_vp8_enc_set_frame_user_data (GstVPXEnc * enc, GstVideoCodecFrame * frame,
   user_data->image = image;
   gst_video_codec_frame_set_user_data (frame, user_data,
       (GDestroyNotify) gst_vp8_enc_user_data_free);
+  return;
+}
+
+static void
+gst_vp8_enc_apply_frame_temporal_settings (GstVPXEnc * enc,
+    GstVideoCodecFrame *frame, guint layer_id, guint8 tl0picidx,
+    gboolean layer_sync)
+{
+  GstVP8EncUserData *user_data;
+
+  user_data = gst_video_codec_frame_get_user_data (frame);
+
+  if (!user_data) {
+    GST_ERROR_OBJECT (enc, "Have no frame user data");
+    return;
+  }
+
+  vpx_codec_control (&enc->encoder, VP8E_SET_TEMPORAL_LAYER_ID, layer_id);
+  user_data->layer_id = layer_id;
+  user_data->tl0picidx = tl0picidx;
+  user_data->layer_sync = layer_sync;
+
+  return;
+}
+
+static void
+gst_vp8_enc_get_frame_temporal_settings (GstVPXEnc * enc,
+    GstVideoCodecFrame * frame, guint * layer_id, guint8 * tl0picidx,
+    gboolean * layer_sync)
+{
+  GstVP8EncUserData *user_data;
+
+  user_data = gst_video_codec_frame_get_user_data (frame);
+
+  if (!user_data) {
+    GST_ERROR_OBJECT (enc, "Have no frame user data");
+    *layer_id = 0;
+    *tl0picidx = 0;
+    *layer_sync = FALSE;
+    return;
+  }
+
+  *layer_id = user_data->layer_id;
+  *tl0picidx = user_data->tl0picidx;
+  *layer_sync = user_data->layer_sync;
+
   return;
 }
 
