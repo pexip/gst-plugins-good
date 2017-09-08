@@ -31,6 +31,7 @@
 #include <gst/rtp/gstrtppayloads.h>
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/video/video.h>
+#include <gst/video/gstvideovp8meta.h>
 #include "dboolhuff.h"
 #include "gstrtpvp8pay.h"
 #include "gstrtputils.h"
@@ -132,11 +133,21 @@ gst_rtp_vp8_pay_picture_id_increment (GstRtpVP8Pay * obj)
 }
 
 static void
+gst_rtp_vp8_pay_reset (GstRtpVP8Pay * obj)
+{
+  gst_rtp_vp8_pay_picture_id_reset (obj);
+  /* tl0picidx MAY start at a random value, but there's no point. Initialize
+   * so that first packet will use 0 for convenience */
+  obj->tl0picidx = -1;
+  obj->temporal_scalability_fields_present = FALSE;
+}
+
+static void
 gst_rtp_vp8_pay_init (GstRtpVP8Pay * obj)
 {
   obj->picture_id_mode = DEFAULT_PICTURE_ID_MODE;
-  gst_rtp_vp8_pay_picture_id_reset (obj);
   obj->picture_id_offset = DEFAULT_PICTURE_ID_OFFSET;
+  gst_rtp_vp8_pay_reset (obj);
 }
 
 static void
@@ -413,21 +424,38 @@ gst_rtp_vp8_offset_to_partition (GstRtpVP8Pay * self, guint offset)
 static gsize
 gst_rtp_vp8_calc_header_len (GstRtpVP8Pay * self)
 {
+  gsize len;
+
   switch (self->picture_id_mode) {
     case VP8_PAY_PICTURE_ID_7BITS:
-      return 3;
+      len = 1;
+      break;
     case VP8_PAY_PICTURE_ID_15BITS:
-      return 4;
+      len = 2;
+      break;
     case VP8_PAY_NO_PICTURE_ID:
     default:
-      return 1;
+      len = 0;
+      break;
   }
+
+  if (self->temporal_scalability_fields_present) {
+    /* Add on space for TL0PICIDX and TID/Y/KEYIDX */
+    len += 2;
+  }
+
+  if (len > 0) {
+    /* All fields above are extension, so allocate space for the ECB field */
+    len++;
+  }
+
+  return len + 1; /* computed + fixed size header */
 }
 
 /* When growing the vp8 header keep max payload len calculation in sync */
 static GstBuffer *
 gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
-    gboolean start, gboolean mark, GstBuffer * in)
+    gboolean start, gboolean mark, GstBuffer * in, GstVideoVP8Meta * meta)
 {
   GstBuffer *out;
   guint8 *p;
@@ -438,20 +466,65 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
       0, 0);
   gst_rtp_buffer_map (out, GST_MAP_READWRITE, &rtpbuffer);
   p = gst_rtp_buffer_get_payload (&rtpbuffer);
+
   /* X=0,R=0,N=0,S=start,PartID=partid */
   p[0] = (start << 4) | partid;
-  if (self->picture_id_mode != VP8_PAY_NO_PICTURE_ID) {
+  if (GST_BUFFER_FLAG_IS_SET (in, GST_BUFFER_FLAG_DROPPABLE)) {
+    /* Enable N=1 */
+    p[0] |= 0x20;
+  }
+
+  if (self->picture_id_mode != VP8_PAY_NO_PICTURE_ID ||
+      self->temporal_scalability_fields_present) {
+    gint index;
+
     /* Enable X=1 */
     p[0] |= 0x80;
-    /* X: I=1,L=0,T=0,K=0,RSV=0 */
-    p[1] = 0x80;
+
+    /* X: I=0,L=0,T=0,K=0,RSV=0 */
+    p[1] = 0x00;
+    if (self->picture_id_mode != VP8_PAY_NO_PICTURE_ID) {
+      /* Set I bit */
+      p[1] |= 0x80;
+    }
+    if (self->temporal_scalability_fields_present) {
+      /* Set L and T bits */
+      p[1] |= 0x60;
+    }
+
+    /* Insert picture ID */
     if (self->picture_id_mode == VP8_PAY_PICTURE_ID_7BITS) {
       /* I: 7 bit picture_id */
       p[2] = self->picture_id & 0x7F;
-    } else {
+      index = 3;
+    } else if (self->picture_id_mode == VP8_PAY_PICTURE_ID_15BITS) {
       /* I: 15 bit picture_id */
       p[2] = 0x80 | ((self->picture_id & 0x7FFF) >> 8);
       p[3] = self->picture_id & 0xFF;
+      index = 4;
+    } else {
+      index = 2;
+    }
+
+    /* Insert TL0PICIDX and TID/Y/KEYIDX */
+    if (self->temporal_scalability_fields_present) {
+      /* The meta contains tl0picidx from the encoder, but we need to ensure
+       * that tl0picidx is increasing correctly. The encoder may reset it's
+       * state and counter, but we cannot. Therefore, we cannot simply copy
+       * the value into the header.*/
+      guint temporal_layer = 0;
+      guint layer_sync = 0;
+      if (meta && meta->use_temporal_scaling) {
+        temporal_layer = meta->temporal_layer_id;
+        layer_sync = meta->layer_sync;
+      }
+      /* FIXME: Support a predicition structure where higher layers don't
+       * necessarily refer to the last base layer frame, ie they use an older
+       * tl0picidx as signalled in the meta */
+      if (temporal_layer == 0)
+        self->tl0picidx++;
+      p[index] = self->tl0picidx & 0xFF;
+      p[index+1] = ((temporal_layer << 6) | (layer_sync << 5)) & 0xFF;
     }
   }
 
@@ -465,15 +538,37 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
   return out;
 }
 
+static gboolean
+foreach_metadata_drop (GstBuffer * buf, GstMeta ** meta, gpointer user_data)
+{
+  GstElement *element = user_data;
+  const GstMetaInfo *info = (*meta)->info;
+
+  if (info == GST_VIDEO_VP8_META_INFO) {
+    GST_DEBUG_OBJECT (element, "dropping metadata %s", g_type_name (info->api));
+    *meta = NULL;
+  }
+
+  return TRUE;
+}
+
+static void
+gst_rtp_vp8_drop_vp8_meta (gpointer element, GstBuffer * buf)
+{
+  gst_buffer_foreach_meta (buf, foreach_metadata_drop, element);
+}
+
 static guint
 gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
-    guint offset, GstBuffer * buffer, gsize buffer_size, gsize max_payload_len)
+    guint offset, GstBuffer * buffer, gsize buffer_size, gsize max_payload_len,
+    GstVideoVP8Meta * meta)
 {
   guint partition;
   GstBuffer *header;
   GstBuffer *sub;
   GstBuffer *out;
   gboolean mark;
+  gboolean start;
   gsize remaining;
   gsize available;
 
@@ -482,16 +577,33 @@ gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
   if (available > remaining)
     available = remaining;
 
-  partition = gst_rtp_vp8_offset_to_partition (self, offset);
-  g_assert (partition < self->n_partitions);
+  if (meta) {
+    /* If meta is present, then we have no partition offset information,
+     * so always emit PID 0 and set the start bit for the first packet
+     * of a frame only (c.f. RFC7741 $4.4)
+     */
+    partition = 0;
+    start = (offset == 0);
+
+    /* For interop it's most likely better to keep the temporal scalability
+     * fields present if the stream previously had them present. Alternating
+     * whether these fields are present or not may confuse the receiver. */
+    if (meta->use_temporal_scaling)
+      self->temporal_scalability_fields_present = TRUE;
+  } else {
+    partition = gst_rtp_vp8_offset_to_partition (self, offset);
+    g_assert (partition < self->n_partitions);
+    start = (offset == self->partition_offset[partition]);
+  }
 
   mark = (remaining == available);
   /* whole set of partitions, payload them and done */
   header = gst_rtp_vp8_create_header_buffer (self, partition,
-      offset == self->partition_offset[partition], mark, buffer);
+      start, mark, buffer, meta);
   sub = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL, offset, available);
 
   gst_rtp_copy_video_meta (self, header, buffer);
+  gst_rtp_vp8_drop_vp8_meta (self, header);
 
   out = gst_buffer_append (header, sub);
 
@@ -507,12 +619,14 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   GstRtpVP8Pay *self = GST_RTP_VP8_PAY (payload);
   GstFlowReturn ret;
   GstBufferList *list;
+  GstVideoVP8Meta *meta;
   gsize size, max_paylen;
   guint offset, mtu, vp8_hdr_len;
 
   size = gst_buffer_get_size (buffer);
-
-  if (G_UNLIKELY (!gst_rtp_vp8_pay_parse_frame (self, buffer, size))) {
+  meta = gst_buffer_get_video_vp8_meta (buffer);
+  if (!meta &&
+      G_UNLIKELY (!gst_rtp_vp8_pay_parse_frame (self, buffer, size))) {
     GST_ELEMENT_ERROR (self, STREAM, ENCODE, (NULL),
         ("Failed to parse VP8 frame"));
     return GST_FLOW_ERROR;
@@ -528,7 +642,8 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   offset = 0;
   while (offset < size) {
     offset +=
-        gst_rtp_vp8_payload_next (self, list, offset, buffer, size, max_paylen);
+        gst_rtp_vp8_payload_next (self, list, offset, buffer, size,
+            max_paylen, meta);
   }
 
   ret = gst_rtp_base_payload_push_list (payload, list);
@@ -546,7 +661,7 @@ gst_rtp_vp8_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
   GstRtpVP8Pay *self = GST_RTP_VP8_PAY (payload);
 
   if (GST_EVENT_TYPE (event) == GST_EVENT_FLUSH_START) {
-    gst_rtp_vp8_pay_picture_id_reset (self);
+    gst_rtp_vp8_pay_reset (self);
   } else if (GST_EVENT_TYPE (event) == GST_EVENT_GAP) {
     guint picture_id = self->picture_id;
     gst_rtp_vp8_pay_picture_id_increment (self);
