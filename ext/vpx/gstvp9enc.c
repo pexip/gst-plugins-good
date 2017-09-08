@@ -102,6 +102,9 @@ static GstFlowReturn gst_vp9_enc_handle_invisible_frame_buffer (GstVPXEnc * enc,
     void *user_data, GstBuffer * buffer);
 static void gst_vp9_enc_set_frame_user_data (GstVPXEnc * enc,
     GstVideoCodecFrame * frame, vpx_image_t * image);
+static void gst_vp9_enc_preflight_buffer (GstVPXEnc * enc,
+    GstVideoCodecFrame * frame, GstBuffer * buffer,
+    gboolean layer_sync, guint layer_id, guint8 tl0picidx);
 
 static void
 gst_vp9_enc_class_init (GstVP9EncClass * klass)
@@ -134,6 +137,7 @@ gst_vp9_enc_class_init (GstVP9EncClass * klass)
   vpx_encoder_class->handle_invisible_frame_buffer =
       gst_vp9_enc_handle_invisible_frame_buffer;
   vpx_encoder_class->set_frame_user_data = gst_vp9_enc_set_frame_user_data;
+  vpx_encoder_class->preflight_buffer = gst_vp9_enc_preflight_buffer;
 
   GST_DEBUG_CATEGORY_INIT (gst_vp9enc_debug, "vp9enc", 0, "VP9 Encoder");
 }
@@ -240,6 +244,14 @@ gst_vp9_enc_handle_invisible_frame_buffer (GstVPXEnc * enc, void *user_data,
   ret = gst_pad_push (GST_VIDEO_ENCODER_SRC_PAD (enc), buffer);
   g_mutex_lock (&enc->encoder_lock);
   return ret;
+}
+
+static void
+gst_vp9_enc_preflight_buffer (GstVPXEnc * enc,
+    GstVideoCodecFrame * frame, GstBuffer * buffer,
+    gboolean layer_sync, guint layer_id, guint8 tl0picidx)
+{
+  return;
 }
 
 static void
