@@ -17,9 +17,13 @@
  * Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
  * Boston, MA 02110-1301, USA.
  */
+
+#define GLIB_DISABLE_DEPRECATION_WARNINGS
+
 #include <gst/check/gstharness.h>
 #include <gst/check/gstcheck.h>
 #include <gst/video/video.h>
+#include <gst/video/gstvideovp8meta.h>
 
 #define gst_caps_new_i420(w, h) gst_caps_new_i420_full (w, h, 30, 1, 1, 1)
 static GstCaps *
@@ -84,7 +88,7 @@ GST_START_TEST (test_encode_simple)
   for (i = 0; i < 20; i++) {
     GstBuffer *buffer = gst_harness_create_video_buffer_full (h, 0x0,
         320, 240, gst_util_uint64_scale (i, GST_SECOND, 25),
-	gst_util_uint64_scale (1, GST_SECOND, 25));
+        gst_util_uint64_scale (1, GST_SECOND, 25));
     fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buffer));
   }
 
@@ -207,6 +211,203 @@ GST_START_TEST (test_autobitrate_changes_with_caps)
 
 GST_END_TEST;
 
+#define verify_meta(buffer, usets, ybit, tid, tl0picindex)              \
+  G_STMT_START {                                                        \
+    GstVideoVP8Meta *meta = gst_buffer_get_video_vp8_meta (buffer);     \
+    fail_unless (meta != NULL);                                         \
+    fail_unless_equals_int (usets, meta->use_temporal_scaling);         \
+    fail_unless_equals_int (ybit, meta->layer_sync);                    \
+    fail_unless_equals_int (tid, meta->temporal_layer_id);              \
+    fail_unless_equals_int (tl0picindex, meta->tl0picidx);              \
+  } G_STMT_END
+
+static void
+configure_vp8ts (GstHarness *h)
+{
+  gint i;
+  GValueArray *decimators = g_value_array_new (3);
+  GValueArray *layer_ids = g_value_array_new (4);
+  GValueArray *bitrates = g_value_array_new (3);
+  GValueArray *layer_flags = g_value_array_new (8);
+  GValueArray *layer_sync_flags = g_value_array_new (8);
+  GValue ival = { 0, }, bval = { 0, };
+
+  g_value_init (&ival, G_TYPE_INT);
+  for (i = 0; i < 3; i++) {
+    /* 7.5, 15, 30fps */
+    static const gint d[] = {4, 2, 1};
+    g_value_set_int (&ival, d[i]);
+    g_value_array_append (decimators, &ival);
+  }
+
+  for (i = 0; i < 4; i++) {
+    static const gint d[] = {0, 2, 1, 2};
+    g_value_set_int (&ival, d[i]);
+    g_value_array_append (layer_ids, &ival);
+  }
+
+  for (i = 0; i < 3; i++) {
+    /* Split 512kbps 40%, 20%, 40% */
+    static const gint d[] = {204800, 307200, 512000};
+    g_value_set_int (&ival, d[i]);
+    g_value_array_append (bitrates, &ival);
+  }
+
+  for (i = 0; i < 8; i++) {
+    /* Build temporal layer pattern */
+    enum {
+      FLAG_NO_REF_LAST    = (1<<16),
+      FLAG_NO_REF_GF      = (1<<17),
+      FLAG_NO_REF_ARF     = (1<<21),
+      FLAG_NO_UPD_LAST    = (1<<18),
+      FLAG_NO_UPD_GF      = (1<<22),
+      FLAG_NO_UPD_ARF     = (1<<23),
+      FLAG_NO_UPD_ENTROPY = (1<<20)
+    };
+    static const gint d[] = {
+      /* layer 0 */
+      FLAG_NO_REF_GF | FLAG_NO_UPD_GF | FLAG_NO_UPD_ARF,
+      /* layer 2 (sync) */
+      FLAG_NO_REF_GF | FLAG_NO_UPD_LAST | FLAG_NO_UPD_GF | FLAG_NO_UPD_ARF | FLAG_NO_UPD_ENTROPY,
+      /* layer 1 (sync) */
+      FLAG_NO_REF_GF | FLAG_NO_UPD_LAST | FLAG_NO_UPD_ARF,
+      /* layer 2 */
+      FLAG_NO_UPD_LAST | FLAG_NO_UPD_GF | FLAG_NO_UPD_ARF | FLAG_NO_UPD_ENTROPY,
+      /* layer 0 */
+      FLAG_NO_REF_GF | FLAG_NO_UPD_GF | FLAG_NO_UPD_ARF,
+      /* layer 2 */
+      FLAG_NO_UPD_LAST | FLAG_NO_UPD_GF | FLAG_NO_UPD_ARF | FLAG_NO_UPD_ENTROPY,
+      /* layer 1 */
+      FLAG_NO_UPD_LAST | FLAG_NO_UPD_ARF,
+      /* layer 2 */
+      FLAG_NO_UPD_LAST | FLAG_NO_UPD_GF | FLAG_NO_UPD_ARF | FLAG_NO_UPD_ENTROPY,
+    };
+    g_value_set_int (&ival, d[i]);
+    g_value_array_append (layer_flags, &ival);
+  }
+
+  g_value_init (&bval, G_TYPE_BOOLEAN);
+  for (i = 0; i < 8; i++) {
+    /* Reflect pattern above */
+    static const gboolean d[] = {
+      FALSE,
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      FALSE,
+      FALSE,
+      FALSE
+    };
+    g_value_set_int (&bval, d[i]);
+    g_value_array_append (layer_sync_flags, &bval);
+  }
+
+  g_object_set(h->element,
+      "temporal-scalability-number-layers", decimators->n_values,
+      "temporal-scalability-periodicity", layer_ids->n_values,
+      "temporal-scalability-rate-decimator", decimators,
+      "temporal-scalability-layer-id", layer_ids,
+      "temporal-scalability-target-bitrate", bitrates,
+      "temporal-scalability-layer-flags", layer_flags,
+      "temporal-scalability-layer-sync-flags", layer_sync_flags,
+      "error-resilient", 1,
+      NULL);
+
+  g_value_array_free (decimators);
+  g_value_array_free (layer_ids);
+  g_value_array_free (bitrates);
+  g_value_array_free (layer_flags);
+  g_value_array_free (layer_sync_flags);
+}
+
+GST_START_TEST (test_encode_temporally_scaled)
+{
+  gint i;
+  struct {
+    gboolean ybit;
+    gint tid;
+    gint tl0picidx;
+    gboolean droppable;
+  } expected[] = {
+    {TRUE,  0, 1, FALSE}, /* This is an intra */
+    {TRUE,  2, 1, TRUE},
+    {TRUE,  1, 1, FALSE},
+    {FALSE, 2, 1, TRUE},
+    {FALSE, 0, 2, FALSE},
+    {FALSE, 2, 2, TRUE},
+    {FALSE, 1, 2, FALSE},
+    {FALSE, 2, 2, TRUE},
+
+    {FALSE, 0, 3, FALSE},
+    {TRUE,  2, 3, TRUE},
+    {TRUE,  1, 3, FALSE},
+    {FALSE, 2, 3, TRUE},
+    {FALSE, 0, 4, FALSE},
+    {FALSE, 2, 4, TRUE},
+    {FALSE, 1, 4, FALSE},
+    {FALSE, 2, 4, TRUE},
+  };
+  GstHarness *h = gst_harness_new ("vp8enc");
+  gst_harness_set_src_caps(h, gst_caps_new_i420 (320, 240));
+  configure_vp8ts (h);
+
+  for (i = 0; i < 16; i++) {
+    GstBuffer *in, *out;
+
+    in = gst_harness_create_video_buffer_full (h, 0x42,
+        320, 240, gst_util_uint64_scale (i, GST_SECOND, 30),
+        gst_util_uint64_scale (1, GST_SECOND, 30));
+    gst_harness_push (h, in);
+
+    out = gst_harness_pull (h);
+    /* Ensure first frame is encoded as an intra */
+    if (i == 0)
+      fail_if (GST_BUFFER_FLAG_IS_SET (out, GST_BUFFER_FLAG_DELTA_UNIT));
+    else
+      fail_unless (GST_BUFFER_FLAG_IS_SET (out, GST_BUFFER_FLAG_DELTA_UNIT));
+    fail_unless_equals_int (expected[i].droppable,
+        GST_BUFFER_FLAG_IS_SET (out, GST_BUFFER_FLAG_DROPPABLE));
+    verify_meta (out, TRUE, expected[i].ybit, expected[i].tid, expected[i].tl0picidx);
+    gst_buffer_unref (out);
+  }
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_encode_fresh_meta)
+{
+  gint i;
+  GstBuffer *buffer;
+  GstHarness *h = gst_harness_new ("vp8enc");
+  gst_harness_set_src_caps (h, gst_caps_new_i420_full (320, 240, 25, 1, 1, 1));
+
+  buffer = gst_harness_create_video_buffer_full (h, 0x0,
+    320, 240, gst_util_uint64_scale (0, GST_SECOND, 25),
+    gst_util_uint64_scale (1, GST_SECOND, 25));
+
+  /* Attach bogus meta to input buffer */
+  gst_buffer_add_video_vp8_meta_full (buffer, FALSE, FALSE, 0, 0);
+
+  for (i = 0; i < 2; i++) {
+    GstBuffer *out;
+
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_harness_push (h, gst_buffer_ref (buffer)));
+
+    out = gst_harness_pull (h);
+    /* Ensure that output buffer has fresh meta */
+    verify_meta (out, FALSE, (i == 0), 0, i + 1);
+    gst_buffer_unref (out);
+  }
+
+  gst_buffer_unref (buffer);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 vp8enc_suite (void)
 {
@@ -219,6 +420,8 @@ vp8enc_suite (void)
   tcase_add_test (tc_chain, test_encode_lag_in_frames);
   tcase_add_test (tc_chain, test_encode_simple_when_bitrate_set_to_zero);
   tcase_add_test (tc_chain, test_autobitrate_changes_with_caps);
+  tcase_add_test (tc_chain, test_encode_temporally_scaled);
+  tcase_add_test (tc_chain, test_encode_fresh_meta);
 
   return s;
 }
