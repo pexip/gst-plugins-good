@@ -225,6 +225,258 @@ GST_START_TEST (test_depay_nopicid)
 }
 GST_END_TEST;
 
+/* PictureID emum is not exported */
+enum PictureID {
+  VP8_PAY_NO_PICTURE_ID = 0,
+  VP8_PAY_PICTURE_ID_7BITS = 1,
+  VP8_PAY_PICTURE_ID_15BITS = 2,
+};
+
+static const struct no_meta_test_data {
+  /* control inputs */
+  enum PictureID pid; /* picture ID type of test */
+  gboolean vp8_payload_header_m_flag;
+
+  /* expected outputs */
+  guint vp8_payload_header_size;
+  guint vp8_payload_control_value;
+} no_meta_test_data[] = {
+  { VP8_PAY_NO_PICTURE_ID,     FALSE , 1, 0x10}, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE,  3, 0x90 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,   4, 0x90 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+
+  /* repeated with non reference frame */
+  { VP8_PAY_NO_PICTURE_ID,     FALSE , 1, 0x30}, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE,  3, 0xB0 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,   4, 0xB0 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+};
+
+GST_START_TEST (test_pay_no_meta)
+{
+  guint8 vp8_bitstream_payload[] = {
+    0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00, 0x90, 0x00, 0x06, 0x47,
+    0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21, 0x00
+  };
+  const struct no_meta_test_data *test_data = &no_meta_test_data[__i__];
+  GstBuffer *buffer, *outbuffer;
+  GstMapInfo map = GST_MAP_INFO_INIT;
+  GstHarness *h = gst_harness_new ("rtpvp8pay");
+  gst_harness_set_src_caps_str (h, "video/x-vp8");
+
+  /* unknown picture id enum value */
+  fail_unless (test_data->pid <= VP8_PAY_PICTURE_ID_15BITS);
+
+  g_object_set (h->element, "picture-id-mode", test_data->pid, NULL);
+
+  /* Push a buffer in */
+  buffer = gst_buffer_new_wrapped (g_memdup (vp8_bitstream_payload, sizeof (vp8_bitstream_payload)), sizeof (vp8_bitstream_payload));
+
+  /* set droppable if N flag set */
+  if ((test_data->vp8_payload_control_value & 0x20) != 0) {
+    GST_BUFFER_FLAG_SET(buffer, GST_BUFFER_FLAG_DROPPABLE);
+  }
+
+  gst_harness_push (h, buffer);
+
+  /* Pull output buffer and verify the VP8 header is sane */
+  outbuffer = gst_harness_pull (h);
+  fail_unless (gst_buffer_map (outbuffer, &map, GST_MAP_READ));
+  fail_unless (map.data != NULL);
+
+  /* check buffer size and content */
+  fail_unless_equals_int (12 + test_data->vp8_payload_header_size + sizeof (vp8_bitstream_payload), map.size); /* RTP + VP8 + VP8 bistream Payload */
+
+  fail_unless_equals_int (test_data->vp8_payload_control_value, map.data[12]);
+
+  if (test_data->vp8_payload_header_size > 2) {
+    /* vp8 header extension byte must have I set */
+    fail_unless_equals_int (0x80, map.data[13]);
+    if (test_data->vp8_payload_header_m_flag) {
+      fail_unless_equals_int (0x80, (map.data[14] & 0x80));
+    } else {
+      fail_unless_equals_int (0x00, (map.data[14] & 0x80));
+    }
+  }
+
+  gst_buffer_unmap (outbuffer, &map);
+  gst_buffer_unref (outbuffer);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
+static const struct with_meta_test_data {
+  /* control inputs */
+  enum PictureID pid; /* picture ID type of test */
+  gboolean vp8_payload_header_m_flag;
+  gboolean use_temporal_scaling;
+  gboolean y_flag;
+
+  /* expected outputs */
+  guint vp8_payload_header_size;
+  guint vp8_payload_control_value;
+  guint vp8_payload_extended_value;
+} with_meta_test_data[] = {
+  { VP8_PAY_NO_PICTURE_ID,     FALSE, FALSE, FALSE, 1, 0x10, 0x80 }, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE, FALSE, FALSE, 3, 0x90, 0x80 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,  FALSE, FALSE, 4, 0x90, 0x80 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+  { VP8_PAY_NO_PICTURE_ID,     FALSE, TRUE,  FALSE, 4, 0x90, 0x60 }, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE, TRUE,  FALSE, 5, 0x90, 0xE0 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,  TRUE,  FALSE, 6, 0x90, 0xE0 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+  { VP8_PAY_NO_PICTURE_ID,     FALSE, TRUE,  TRUE,  4, 0x90, 0x60 }, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE, TRUE,  TRUE,  5, 0x90, 0xE0 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,  TRUE,  TRUE,  6, 0x90, 0xE0 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+
+  /* repeated with non reference frame */
+  { VP8_PAY_NO_PICTURE_ID,     FALSE, FALSE, FALSE, 1, 0x30, 0x80 }, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE, FALSE, FALSE, 3, 0xB0, 0x80 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,  FALSE, FALSE, 4, 0xB0, 0x80 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+  { VP8_PAY_NO_PICTURE_ID,     FALSE, TRUE,  FALSE, 4, 0xB0, 0x60 }, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE, TRUE,  FALSE, 5, 0xB0, 0xE0 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,  TRUE,  FALSE, 6, 0xB0, 0xE0 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+  { VP8_PAY_NO_PICTURE_ID,     FALSE, TRUE,  TRUE,  4, 0xB0, 0x60 }, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,  FALSE, TRUE,  TRUE,  5, 0xB0, 0xE0 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS, TRUE,  TRUE,  TRUE,  6, 0xB0, 0xE0 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+
+};
+
+GST_START_TEST (test_pay_with_meta)
+{
+  guint8 vp8_bitstream_payload[] = {
+    0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00, 0x90, 0x00, 0x06, 0x47,
+    0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21, 0x00
+  };
+  const struct with_meta_test_data *test_data = &with_meta_test_data[__i__];
+  GstBuffer *buffer, *outbuffer;
+  GstVideoVP8Meta *meta;
+  GstMapInfo map = GST_MAP_INFO_INIT;
+  GstHarness *h = gst_harness_new ("rtpvp8pay");
+  gst_harness_set_src_caps_str (h, "video/x-vp8");
+
+  /* check for unknown picture id enum value */
+  fail_unless (test_data->pid <= VP8_PAY_PICTURE_ID_15BITS);
+
+  g_object_set (h->element, "picture-id-mode", test_data->pid, NULL);
+
+  /* Push a buffer in */
+  buffer = gst_buffer_new_wrapped (g_memdup (vp8_bitstream_payload, sizeof (vp8_bitstream_payload)), sizeof (vp8_bitstream_payload));
+  gst_buffer_add_video_vp8_meta_full (buffer,
+      0x5A5A, /* picture ID */
+      test_data->use_temporal_scaling,
+      test_data->y_flag,  /* Y bit */
+      2,  /* set temporal layer ID */
+      0xA5); /* tl0picidx */
+
+  /* set droppable if N flag set */
+  if ((test_data->vp8_payload_control_value & 0x20) != 0) {
+    GST_BUFFER_FLAG_SET(buffer, GST_BUFFER_FLAG_DROPPABLE);
+  }
+
+  gst_harness_push (h, buffer);
+
+  /* Pull output buffer, and verify the VP8 header is sane */
+  outbuffer = gst_harness_pull (h);
+  fail_unless (gst_buffer_map (outbuffer, &map, GST_MAP_READ));
+  fail_unless (map.data != NULL);
+
+  meta = gst_buffer_get_video_vp8_meta (outbuffer);
+  fail_unless (meta == NULL);
+
+  /* check buffer size and content */
+  fail_unless_equals_int (12 + test_data->vp8_payload_header_size + sizeof (vp8_bitstream_payload), map.size); /* RTP + VP8 + VP8 bistream Payload */
+
+  fail_unless_equals_int (test_data->vp8_payload_control_value, map.data[12]);
+
+  if (test_data->vp8_payload_header_size > 1) {
+    int hdridx = 13;
+    fail_unless_equals_int (test_data->vp8_payload_extended_value, map.data[hdridx++]);
+
+    /* check picture ID */
+    if (test_data->pid == VP8_PAY_PICTURE_ID_7BITS) {
+      fail_unless_equals_int (0x5A, map.data[hdridx++]);
+    } else if (test_data->pid == VP8_PAY_PICTURE_ID_15BITS) {
+      fail_unless_equals_int (0xDA, map.data[hdridx++]);
+      fail_unless_equals_int (0x5A, map.data[hdridx++]);
+    }
+
+    if (test_data->use_temporal_scaling) {
+      /* check temporal layer 0 picture ID value */
+      fail_unless_equals_int (0xA5, map.data[hdridx++]);
+      /* check temporal layer ID value */
+      fail_unless_equals_int (2, (map.data[hdridx] >> 6) & 0x3);
+
+      if (test_data->y_flag) {
+	fail_unless_equals_int (1, (map.data[hdridx] >> 5) & 1);
+      } else {
+	fail_unless_equals_int (0, (map.data[hdridx] >> 5) & 1);
+      }
+    }
+  }
+
+  gst_buffer_unmap (outbuffer, &map);
+  gst_buffer_unref (outbuffer);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_pay_meta_no_picid)
+{
+  guint8 vp8_bitstream_payload[] = {
+    0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00, 0x90, 0x00, 0x06, 0x47,
+    0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21, 0x00
+  };
+  gint i, last_picid = 0;
+  GstBuffer *buffer, *outbuffer;
+  GstHarness *h = gst_harness_new ("rtpvp8pay");
+  g_object_set (h->element, "picture-id-mode", VP8_PAY_PICTURE_ID_15BITS, NULL);
+  gst_harness_set_src_caps_str (h, "video/x-vp8");
+
+  buffer = gst_buffer_new_wrapped (g_memdup (vp8_bitstream_payload,
+      sizeof (vp8_bitstream_payload)),
+      sizeof (vp8_bitstream_payload));
+
+  /* Add meta indicating missing picture ID */
+  gst_buffer_add_video_vp8_meta_full (buffer, 0xFFFF, FALSE, FALSE, 0, 0);
+
+  for (i = 0; i < 2; i++) {
+    GstMapInfo map = GST_MAP_INFO_INIT;
+
+    gst_harness_push (h, gst_buffer_ref (buffer));
+
+    outbuffer = gst_harness_pull (h);
+    fail_unless (gst_buffer_map (outbuffer, &map, GST_MAP_READ));
+    fail_unless (map.data != NULL);
+
+    /* check buffer size and content */
+    fail_unless_equals_int (16 + sizeof (vp8_bitstream_payload), map.size);
+
+    fail_unless_equals_int (0x90, map.data[12]);
+    fail_unless_equals_int (0x80, map.data[13]);
+
+    /* Initial picture ID is random, so collect the first one
+     * and assert that the second one is correct. */
+    if (i == 0) {
+      last_picid = ((map.data[14] << 8) | map.data[15]) & 0x7fff;
+    } else {
+      gint expected = last_picid + 1;
+      if (last_picid == 0x7fff)
+        expected = 0;
+
+      fail_unless_equals_int (expected,
+          ((map.data[14] << 8) | map.data[15]) & 0x7fff);
+    }
+
+    gst_buffer_unmap (outbuffer, &map);
+    gst_buffer_unref (outbuffer);
+  }
+
+  gst_buffer_unref (buffer);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 rtpvp8_suite (void)
 {
@@ -237,6 +489,11 @@ rtpvp8_suite (void)
   tcase_add_loop_test (tc_chain, test_depay_resend_gap_event_nopicid, 0, G_N_ELEMENTS (resend_gap_event_nopicid_test_data));
   tcase_add_loop_test (tc_chain, test_depay_create_gap_event_on_picid_gaps, 0, G_N_ELEMENTS (create_gap_event_on_picid_gaps_test_data));
   tcase_add_loop_test (tc_chain, test_depay_nopicid, 0, G_N_ELEMENTS (nopicid_test_data));
+
+  suite_add_tcase (s, (tc_chain = tcase_create ("vp8pay")));
+  tcase_add_loop_test (tc_chain, test_pay_no_meta, 0 , G_N_ELEMENTS(no_meta_test_data));
+  tcase_add_loop_test (tc_chain, test_pay_with_meta, 0 , G_N_ELEMENTS(with_meta_test_data));
+  tcase_add_test (tc_chain, test_pay_meta_no_picid);
 
   return s;
 }

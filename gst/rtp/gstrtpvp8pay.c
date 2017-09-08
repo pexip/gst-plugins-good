@@ -31,6 +31,7 @@
 #include <gst/rtp/gstrtppayloads.h>
 #include <gst/rtp/gstrtpbuffer.h>
 #include <gst/video/video.h>
+#include <gst/video/gstvideovp8meta.h>
 #include "dboolhuff.h"
 #include "gstrtpvp8pay.h"
 #include "gstrtputils.h"
@@ -388,47 +389,101 @@ gst_rtp_vp8_offset_to_partition (GstRtpVP8Pay * self, guint offset)
 }
 
 static gsize
-gst_rtp_vp8_calc_header_len (GstRtpVP8Pay * self)
+gst_rtp_vp8_calc_header_len (GstRtpVP8Pay * self, GstVideoVP8Meta * meta)
 {
+  gsize len;
+
   switch (self->picture_id_mode) {
     case VP8_PAY_PICTURE_ID_7BITS:
-      return 3;
+      len = 1;
+      break;
     case VP8_PAY_PICTURE_ID_15BITS:
-      return 4;
+      len = 2;
+      break;
     case VP8_PAY_NO_PICTURE_ID:
     default:
-      return 1;
+      len = 0;
+      break;
   }
+
+  if (meta && meta->use_temporal_scaling) {
+    /* Add on space for TLOPICIDX and TID/Y/KEYIDX */
+    len += 2;
+  }
+
+  if (len > 0) {
+    /* All fields above are extension, so allocate space for the ECB field */
+    len++;
+  }
+
+  return len + 1; /* computed + fixed size header */
 }
 
 /* When growing the vp8 header keep max payload len calculation in sync */
 static GstBuffer *
 gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
-    gboolean start, gboolean mark, GstBuffer * in)
+    gboolean start, gboolean mark, GstBuffer * in, GstVideoVP8Meta * meta)
 {
   GstBuffer *out;
   guint8 *p;
   GstRTPBuffer rtpbuffer = GST_RTP_BUFFER_INIT;
 
   out = gst_rtp_base_payload_allocate_output_buffer (
-      GST_RTP_BASE_PAYLOAD_CAST (self), gst_rtp_vp8_calc_header_len (self),
+      GST_RTP_BASE_PAYLOAD_CAST (self),
+      gst_rtp_vp8_calc_header_len (self, meta),
       0, 0);
   gst_rtp_buffer_map (out, GST_MAP_READWRITE, &rtpbuffer);
   p = gst_rtp_buffer_get_payload (&rtpbuffer);
+
   /* X=0,R=0,N=0,S=start,PartID=partid */
   p[0] = (start << 4) | partid;
-  if (self->picture_id_mode != VP8_PAY_NO_PICTURE_ID) {
+  if (GST_BUFFER_FLAG_IS_SET (in, GST_BUFFER_FLAG_DROPPABLE)) {
+    /* Enable N=1 */
+    p[0] |= 0x20;
+  }
+  if (self->picture_id_mode != VP8_PAY_NO_PICTURE_ID ||
+      (meta && meta->use_temporal_scaling)) {
+    gint index;
+
+    guint16 picture_id = self->picture_id & 0x7FFF;
+    if (meta && meta->picture_id < 0x8000) {
+      /* Prefer picture ID from meta if it's valid */
+      picture_id = meta->picture_id;
+    }
+
     /* Enable X=1 */
     p[0] |= 0x80;
-    /* X: I=1,L=0,T=0,K=0,RSV=0 */
-    p[1] = 0x80;
+
+    /* X: I=0,L=0,T=0,K=0,RSV=0 */
+    p[1] = 0x00;
+    if (self->picture_id_mode != VP8_PAY_NO_PICTURE_ID) {
+      /* Set I bit */
+      p[1] |= 0x80;
+    }
+    if (meta && meta->use_temporal_scaling) {
+      /* Set L and T bits */
+      p[1] |= 0x60;
+    }
+
+    /* Insert picture ID */
     if (self->picture_id_mode == VP8_PAY_PICTURE_ID_7BITS) {
       /* I: 7 bit picture_id */
-      p[2] = self->picture_id & 0x7F;
-    } else {
+      p[2] = picture_id & 0x7F;
+      index = 3;
+    } else if (self->picture_id_mode == VP8_PAY_PICTURE_ID_15BITS) {
       /* I: 15 bit picture_id */
-      p[2] = 0x80 | ((self->picture_id & 0x7FFF) >> 8);
-      p[3] = self->picture_id & 0xFF;
+      p[2] = 0x80 | ((picture_id & 0x7FFF) >> 8);
+      p[3] = picture_id & 0xFF;
+      index = 4;
+    } else {
+      index = 2;
+    }
+
+    /* Insert TL0PICIDX and TID/Y/KEYIDX */
+    if (meta && meta->use_temporal_scaling) {
+      p[index] = meta->tl0picidx;
+      p[index+1] = ((meta->temporal_layer_id & 0x3) << 6) |
+          (meta->layer_sync << 5);
     }
   }
 
@@ -442,15 +497,37 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
   return out;
 }
 
+static gboolean
+foreach_metadata_drop (GstBuffer * buf, GstMeta ** meta, gpointer user_data)
+{
+  GstElement *element = user_data;
+  const GstMetaInfo *info = (*meta)->info;
+
+  if (info == GST_VIDEO_VP8_META_INFO) {
+    GST_DEBUG_OBJECT (element, "dropping metadata %s", g_type_name (info->api));
+    *meta = NULL;
+  }
+
+  return TRUE;
+}
+
+static void
+gst_rtp_vp8_drop_vp8_meta (gpointer element, GstBuffer * buf)
+{
+  gst_buffer_foreach_meta (buf, foreach_metadata_drop, element);
+}
+
 static guint
 gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
-    guint offset, GstBuffer * buffer, gsize buffer_size, gsize max_payload_len)
+    guint offset, GstBuffer * buffer, gsize buffer_size, gsize max_payload_len,
+    GstVideoVP8Meta * meta)
 {
   guint partition;
   GstBuffer *header;
   GstBuffer *sub;
   GstBuffer *out;
   gboolean mark;
+  gboolean start;
   gsize remaining;
   gsize available;
 
@@ -459,16 +536,27 @@ gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
   if (available > remaining)
     available = remaining;
 
-  partition = gst_rtp_vp8_offset_to_partition (self, offset);
-  g_assert (partition < self->n_partitions);
+  if (meta) {
+    /* If meta is present, then we have no partition offset information,
+     * so always emit PID 0 and set the start bit for the first packet
+     * of a frame only (c.f. RFC7741 $4.4)
+     */
+    partition = 0;
+    start = (offset == 0);
+  } else {
+    partition = gst_rtp_vp8_offset_to_partition (self, offset);
+    g_assert (partition < self->n_partitions);
+    start = (offset == self->partition_offset[partition]);
+  }
 
   mark = (remaining == available);
   /* whole set of partitions, payload them and done */
   header = gst_rtp_vp8_create_header_buffer (self, partition,
-      offset == self->partition_offset[partition], mark, buffer);
+      start, mark, buffer, meta);
   sub = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL, offset, available);
 
   gst_rtp_copy_video_meta (self, header, buffer);
+  gst_rtp_vp8_drop_vp8_meta (self, header);
 
   out = gst_buffer_append (header, sub);
 
@@ -484,19 +572,21 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   GstRtpVP8Pay *self = GST_RTP_VP8_PAY (payload);
   GstFlowReturn ret;
   GstBufferList *list;
+  GstVideoVP8Meta *meta;
   gsize size, max_paylen;
   guint offset, mtu, vp8_hdr_len;
 
   size = gst_buffer_get_size (buffer);
-
-  if (G_UNLIKELY (!gst_rtp_vp8_pay_parse_frame (self, buffer, size))) {
+  meta = gst_buffer_get_video_vp8_meta (buffer);
+  if (!meta &&
+      G_UNLIKELY (!gst_rtp_vp8_pay_parse_frame (self, buffer, size))) {
     GST_ELEMENT_ERROR (self, STREAM, ENCODE, (NULL),
         ("Failed to parse VP8 frame"));
     return GST_FLOW_ERROR;
   }
 
   mtu = GST_RTP_BASE_PAYLOAD_MTU (payload);
-  vp8_hdr_len = gst_rtp_vp8_calc_header_len (self);
+  vp8_hdr_len = gst_rtp_vp8_calc_header_len (self, meta);
   max_paylen = gst_rtp_buffer_calc_payload_len (mtu - vp8_hdr_len, 0,
       gst_rtp_base_payload_get_source_count (payload, buffer));
 
@@ -505,7 +595,8 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
   offset = 0;
   while (offset < size) {
     offset +=
-        gst_rtp_vp8_payload_next (self, list, offset, buffer, size, max_paylen);
+        gst_rtp_vp8_payload_next (self, list, offset, buffer, size,
+            max_paylen, meta);
   }
 
   ret = gst_rtp_base_payload_push_list (payload, list);
