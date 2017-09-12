@@ -773,12 +773,15 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
   GstVPXEnc *gst_vpx_enc;
   gboolean global = FALSE;
   vpx_codec_err_t status;
+  GstVPXEncClass *gst_vpx_enc_class;
 
   g_return_if_fail (GST_IS_VPX_ENC (object));
   gst_vpx_enc = GST_VPX_ENC (object);
+  gst_vpx_enc_class = GST_VPX_ENC_GET_CLASS (gst_vpx_enc);
 
   GST_DEBUG_OBJECT (object, "gst_vpx_enc_set_property");
   g_mutex_lock (&gst_vpx_enc->encoder_lock);
+
   switch (prop_id) {
     case PROP_RC_END_USAGE:
       gst_vpx_enc->cfg.rc_end_usage = g_value_get_enum (value);
@@ -953,7 +956,7 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
 #ifdef HAVE_VPX_1_3
     case PROP_TILE_COLUMNS:
       gst_vpx_enc->tile_columns = g_value_get_int (value);
-      if (gst_vpx_enc->inited) {
+      if (gst_vpx_enc_class->enable_tiles (gst_vpx_enc) && gst_vpx_enc->inited) {
         status =
           vpx_codec_control (&gst_vpx_enc->encoder, VP9E_SET_TILE_COLUMNS,
               gst_vpx_enc->tile_columns);
@@ -966,11 +969,10 @@ gst_vpx_enc_set_property (GObject * object, guint prop_id,
       break;
     case PROP_TILE_ROWS:
       gst_vpx_enc->tile_rows = g_value_get_int (value);
-      if (gst_vpx_enc->inited) {
+      if (gst_vpx_enc_class->enable_tiles (gst_vpx_enc) && gst_vpx_enc->inited) {
         status =
           vpx_codec_control (&gst_vpx_enc->encoder, VP9E_SET_TILE_ROWS,
               gst_vpx_enc->tile_rows);
-        status = VPX_CODEC_INCAPABLE;
         if (status != VPX_CODEC_OK) {
           GST_WARNING_OBJECT (gst_vpx_enc,
               "Failed to set VP9E_SET_TILE_ROWS: %s",
@@ -1627,20 +1629,22 @@ gst_vpx_enc_set_format (GstVideoEncoder * video_encoder,
   }
 
 #ifdef HAVE_VPX_1_3
-  status =
-    vpx_codec_control (&encoder->encoder, VP9E_SET_TILE_COLUMNS,
-        encoder->tile_columns);
-  if (status != VPX_CODEC_OK) {
-    GST_WARNING_OBJECT (encoder, "Failed to set VP9E_SET_TILE_COLUMNS: %s",
-        gst_vpx_error_name (status));
-  }
+  if (vpx_enc_class->enable_tiles (encoder)) {
+    status =
+      vpx_codec_control (&encoder->encoder, VP9E_SET_TILE_COLUMNS,
+          encoder->tile_columns);
+    if (status != VPX_CODEC_OK) {
+      GST_WARNING_OBJECT (encoder, "Failed to set VP9E_SET_TILE_COLUMNS: %s",
+          gst_vpx_error_name (status));
+    }
 
-  status =
-    vpx_codec_control (&encoder->encoder, VP9E_SET_TILE_ROWS,
-        encoder->tile_rows);
-  if (status != VPX_CODEC_OK) {
-    GST_WARNING_OBJECT (encoder, "Failed to set VP9E_SET_TILE_ROWS: %s",
-        gst_vpx_error_name (status));
+    status =
+      vpx_codec_control (&encoder->encoder, VP9E_SET_TILE_ROWS,
+          encoder->tile_rows);
+    if (status != VPX_CODEC_OK) {
+      GST_WARNING_OBJECT (encoder, "Failed to set VP9E_SET_TILE_ROWS: %s",
+          gst_vpx_error_name (status));
+    }
   }
 #endif
 
