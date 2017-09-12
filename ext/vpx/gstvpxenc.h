@@ -122,6 +122,8 @@ struct _GstVPXEncClass
   vpx_codec_iface_t* (*get_algo) (GstVPXEnc *enc);
   /*enabled scaling*/
   gboolean (*enable_scaling) (GstVPXEnc *enc);
+  /*enabled tiles*/
+  gboolean (*enable_tiles) (GstVPXEnc *enc);
   /*set image format info*/
   void (*set_image_format) (GstVPXEnc *enc, vpx_image_t *image);
   /*get new simple caps*/
