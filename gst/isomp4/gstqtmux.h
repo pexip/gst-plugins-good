@@ -148,9 +148,7 @@ struct _GstQTPad
   GstQTPadCreateEmptyBufferFunc create_empty_buffer;
 
   /* SMPTE timecode */
-  GstVideoTimeCode *first_tc;
   GstClockTime first_pts;
-  guint64 tc_pos;
 
   /* for keeping track in pre-fill mode */
   GArray *samples;

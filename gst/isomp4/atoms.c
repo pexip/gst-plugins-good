@@ -398,96 +398,6 @@ atom_edts_free (AtomEDTS * edts)
 }
 
 static void
-atom_tcmi_init (AtomTCMI * tcmi)
-{
-  guint8 flags[3] = { 0, 0, 0 };
-
-  atom_full_init (&tcmi->header, FOURCC_tcmi, 0, 0, 0, flags);
-}
-
-static void
-atom_tcmi_clear (AtomTCMI * tcmi)
-{
-  atom_full_clear (&tcmi->header);
-  tcmi->text_font = 0;
-  tcmi->text_face = 0;
-  tcmi->text_size = 0;
-  tcmi->text_color[0] = 0;
-  tcmi->text_color[1] = 0;
-  tcmi->text_color[2] = 0;
-  tcmi->bg_color[0] = 0;
-  tcmi->bg_color[1] = 0;
-  tcmi->bg_color[2] = 0;
-  g_free (tcmi->font_name);
-  tcmi->font_name = NULL;
-}
-
-static void
-atom_tmcd_init (AtomTMCD * tmcd)
-{
-  atom_header_set (&tmcd->header, FOURCC_tmcd, 0, 0);
-  atom_tcmi_init (&tmcd->tcmi);
-}
-
-static void
-atom_tmcd_clear (AtomTMCD * tmcd)
-{
-  atom_clear (&tmcd->header);
-  atom_tcmi_clear (&tmcd->tcmi);
-}
-
-static void
-atom_gmin_init (AtomGMIN * gmin)
-{
-  guint8 flags[3] = { 0, 0, 0 };
-
-  atom_full_init (&gmin->header, FOURCC_gmin, 0, 0, 0, flags);
-}
-
-static void
-atom_gmin_clear (AtomGMIN * gmin)
-{
-  atom_full_clear (&gmin->header);
-  gmin->graphics_mode = 0;
-  gmin->opcolor[0] = 0;
-  gmin->opcolor[1] = 0;
-  gmin->opcolor[2] = 0;
-  gmin->balance = 0;
-  gmin->reserved = 0;
-}
-
-static void
-atom_gmhd_init (AtomGMHD * gmhd)
-{
-  atom_header_set (&gmhd->header, FOURCC_gmhd, 0, 0);
-  atom_gmin_init (&gmhd->gmin);
-  atom_tmcd_init (&gmhd->tmcd);
-}
-
-static void
-atom_gmhd_clear (AtomGMHD * gmhd)
-{
-  atom_clear (&gmhd->header);
-  atom_gmin_clear (&gmhd->gmin);
-  atom_tmcd_clear (&gmhd->tmcd);
-}
-
-static AtomGMHD *
-atom_gmhd_new (void)
-{
-  AtomGMHD *gmhd = g_new0 (AtomGMHD, 1);
-  atom_gmhd_init (gmhd);
-  return gmhd;
-}
-
-static void
-atom_gmhd_free (AtomGMHD * gmhd)
-{
-  atom_gmhd_clear (gmhd);
-  g_free (gmhd);
-}
-
-static void
 atom_sample_entry_init (SampleTableEntry * se, guint32 type)
 {
   atom_header_set (&se->header, type, 0, 0);
@@ -539,38 +449,6 @@ sample_entry_mp4a_free (SampleTableEntryMP4A * mp4a)
   atom_sample_entry_free (&mp4a->se);
   atom_info_list_free (mp4a->extension_atoms);
   g_free (mp4a);
-}
-
-static void
-sample_entry_tmcd_init (SampleTableEntryTMCD * tmcd)
-{
-  atom_sample_entry_init (&tmcd->se, FOURCC_tmcd);
-
-  tmcd->tc_flags = 0;
-  tmcd->timescale = 0;
-  tmcd->frame_duration = 0;
-  tmcd->n_frames = 0;
-
-  tmcd->name.language_code = 0;
-  g_free (tmcd->name.name);
-  tmcd->name.name = NULL;
-}
-
-static SampleTableEntryTMCD *
-sample_entry_tmcd_new (void)
-{
-  SampleTableEntryTMCD *tmcd = g_new0 (SampleTableEntryTMCD, 1);
-
-  sample_entry_tmcd_init (tmcd);
-  return tmcd;
-}
-
-static void
-sample_entry_tmcd_free (SampleTableEntryTMCD * tmcd)
-{
-  atom_sample_entry_free (&tmcd->se);
-  g_free (tmcd->name.name);
-  g_free (tmcd);
 }
 
 static void
@@ -683,7 +561,6 @@ atom_stsd_remove_entries (AtomSTSD * stsd)
         sample_entry_tx3g_free ((SampleTableEntryTX3G *) se);
         break;
       case TIMECODE:
-        sample_entry_tmcd_free ((SampleTableEntryTMCD *) se);
         break;
       default:
         /* best possible cleanup */
@@ -1086,10 +963,6 @@ atom_minf_clear_handlers (AtomMINF * minf)
   if (minf->hmhd) {
     atom_hmhd_free (minf->hmhd);
     minf->hmhd = NULL;
-  }
-  if (minf->gmhd) {
-    atom_gmhd_free (minf->gmhd);
-    minf->gmhd = NULL;
   }
 }
 
@@ -3811,40 +3684,6 @@ atom_framerate_to_timescale (gint n, gint d)
   return gst_util_uint64_scale (n, 100, d);
 }
 
-static SampleTableEntryTMCD *
-atom_trak_add_timecode_entry (AtomTRAK * trak, AtomsContext * context,
-    GstVideoTimeCode * tc)
-{
-  AtomSTSD *stsd = &trak->mdia.minf.stbl.stsd;
-  SampleTableEntryTMCD *tmcd = sample_entry_tmcd_new ();
-
-  trak->mdia.hdlr.component_type = FOURCC_mhlr;
-  trak->mdia.hdlr.handler_type = FOURCC_tmcd;
-  g_free (trak->mdia.hdlr.name);
-  trak->mdia.hdlr.name = g_strdup ("Time Code Media Handler");
-  trak->mdia.mdhd.time_info.timescale =
-      atom_framerate_to_timescale (tc->config.fps_n, tc->config.fps_d);
-
-  tmcd->se.kind = TIMECODE;
-  tmcd->se.data_reference_index = 1;
-  tmcd->tc_flags = TC_24H_MAX;
-  if (tc->config.flags &= GST_VIDEO_TIME_CODE_FLAGS_DROP_FRAME)
-    tmcd->tc_flags |= TC_DROP_FRAME;
-  tmcd->name.language_code = 0;
-  tmcd->name.name = g_strdup ("Tape");
-  tmcd->timescale =
-      atom_framerate_to_timescale (tc->config.fps_n, tc->config.fps_d);
-  tmcd->frame_duration = 100;
-  if (tc->config.fps_d == 1001)
-    tmcd->n_frames = tc->config.fps_n / 1000;
-  else
-    tmcd->n_frames = tc->config.fps_n / tc->config.fps_d;
-
-  stsd->entries = g_list_prepend (stsd->entries, tmcd);
-  stsd->n_entries++;
-  return tmcd;
-}
-
 static SampleTableEntryMP4V *
 atom_trak_add_video_entry (AtomTRAK * trak, AtomsContext * context,
     guint32 type)
@@ -3985,34 +3824,6 @@ atom_trak_set_audio_type (AtomTRAK * trak, AtomsContext * context,
 
   /* 0 size means variable size */
   atom_trak_set_constant_size_samples (trak, sample_size);
-
-  return ste;
-}
-
-SampleTableEntryTMCD *
-atom_trak_set_timecode_type (AtomTRAK * trak, AtomsContext * context,
-    GstVideoTimeCode * tc)
-{
-  SampleTableEntryTMCD *ste;
-  AtomGMHD *gmhd = trak->mdia.minf.gmhd;
-
-  if (context->flavor != ATOMS_TREE_FLAVOR_MOV) {
-    return NULL;
-  }
-
-  ste = atom_trak_add_timecode_entry (trak, context, tc);
-
-  gmhd = atom_gmhd_new ();
-  gmhd->gmin.graphics_mode = 0x0040;
-  gmhd->gmin.opcolor[0] = 0x8000;
-  gmhd->gmin.opcolor[1] = 0x8000;
-  gmhd->gmin.opcolor[2] = 0x8000;
-  gmhd->tmcd.tcmi.text_size = 12;
-  gmhd->tmcd.tcmi.font_name = g_strdup ("Chicago");     /* Pascal string */
-
-  trak->mdia.minf.gmhd = gmhd;
-  trak->is_video = FALSE;
-  trak->is_h264 = FALSE;
 
   return ste;
 }
