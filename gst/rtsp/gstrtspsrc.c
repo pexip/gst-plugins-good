@@ -2350,6 +2350,7 @@ gst_rtspsrc_handle_src_sink_event (GstPad * pad, GstObject * parent,
 
       gst_event_unref (event);
       event = gst_event_new_stream_start (stream_id);
+      g_free (stream_id);
       break;
     }
     default:
