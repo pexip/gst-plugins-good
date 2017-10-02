@@ -1,6 +1,6 @@
 subdir('directsound')
-subdir('oss')
-subdir('oss4')
+#subdir('oss')
+#subdir('oss4')
 subdir('v4l2')
 subdir('ximage')
 
