@@ -278,7 +278,7 @@ subdir('gst')
 subdir('sys')
 subdir('ext')
 subdir('tests')
-subdir('po')
+#subdir('po')
 subdir('pkgconfig')
 
 configure_file(output : 'config.h', configuration : cdata)
