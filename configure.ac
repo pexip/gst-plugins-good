@@ -988,7 +988,7 @@ AH_BOTTOM([
 #elif defined (GST_ISA_AVX2)
   #define GST_ISA_SUFFIX(name) G_PASTE (name, _avx2)
 #else
-  #define GST_ISA_SUFFIX(name) (name)
+  #define GST_ISA_SUFFIX(name) name
 #endif
 ])
 
