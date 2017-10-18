@@ -257,7 +257,8 @@ check_rtpmanager = \
 	elements/rtpred \
 	elements/rtpulpfec \
 	elements/rtpssrcdemux \
-	elements/rtpptdemux
+	elements/rtpptdemux \
+	elements/rtpfunnel
 else
 check_rtpmanager =
 endif
@@ -627,6 +628,9 @@ elements_rtpsession_LDADD = $(GST_PLUGINS_BASE_LIBS) $(GST_NET_LIBS) -lgstrtp-$(
 
 elements_rtpptdemux_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
 elements_rtpptdemux_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(GST_BASE_LIBS) $(LDADD)
+
+elements_rtpfunnel_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
+elements_rtpfunnel_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(GST_BASE_LIBS) $(LDADD)
 
 elements_rtpssrcdemux_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
 elements_rtpssrcdemux_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstrtp-$(GST_API_VERSION) $(GST_BASE_LIBS) $(LDADD)
