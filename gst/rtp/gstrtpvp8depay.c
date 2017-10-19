@@ -26,6 +26,7 @@
 #include "gstrtputils.h"
 
 #include <gst/video/video.h>
+#include <gst/video/gstvideovp8meta.h>
 
 #include <stdio.h>
 
@@ -254,8 +255,11 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
   GstRtpVP8Depay *self = GST_RTP_VP8_DEPAY_CAST (depay);
   GstBuffer *payload;
   guint8 *data;
-  guint hdrsize = 1;
+  guint hdridx = 0;
   guint picture_id = PICTURE_ID_NONE;
+  gboolean temporally_scaled = FALSE;
+  guint tl0picidx = 0;
+  guint tid_y_keyidx = 0;
   guint size = gst_rtp_buffer_get_payload_len (rtp);
 
   if (G_UNLIKELY (GST_BUFFER_IS_DISCONT (rtp->buffer))) {
@@ -271,31 +275,44 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
   data = gst_rtp_buffer_get_payload (rtp);
   /* Check X optional header */
   if ((data[0] & 0x80) != 0) {
-    hdrsize++;
+    hdridx++;
     /* Check I optional header */
     if ((data[1] & 0x80) != 0) {
-      if (G_UNLIKELY (size < 3))
+      hdridx++;
+      if (G_UNLIKELY (size <= hdridx))
         goto too_small;
-      hdrsize++;
       /* Check for 16 bits PictureID */
-      picture_id = data[2];
-      if ((data[2] & 0x80) != 0) {
-        if (G_UNLIKELY (size < 4))
+      picture_id = data[hdridx];
+      if ((picture_id & 0x80) != 0) {
+        hdridx++;
+        if (G_UNLIKELY (size <= hdridx))
           goto too_small;
-        hdrsize++;
-        picture_id = (picture_id << 8) | data[3];
+        /* Retain marker bit as IS_PICTURE_ID_15BITS uses it */
+        picture_id = (picture_id << 8) | data[hdridx];
       }
     }
+    /* Stream is temporally scaled if L or T bits are set */
+    temporally_scaled = ((data[1] & 0x60) != 0);
     /* Check L optional header */
-    if ((data[1] & 0x40) != 0)
-      hdrsize++;
+    if ((data[1] & 0x40) != 0) {
+      hdridx++;
+      if (G_UNLIKELY (size <= hdridx))
+         goto too_small;
+      /* T must also be set. Ignore, otherwise */
+      if ((data[1] & 0x20) != 0)
+        tl0picidx = data[hdridx];
+    }
     /* Check T or K optional headers */
-    if ((data[1] & 0x20) != 0 || (data[1] & 0x10) != 0)
-      hdrsize++;
+    if ((data[1] & 0x20) != 0 || (data[1] & 0x10) != 0) {
+      hdridx++;
+      if (G_UNLIKELY (size <= hdridx))
+        goto too_small;
+      tid_y_keyidx = data[hdridx];
+    }
   }
-  GST_LOG_OBJECT (depay, "hdrsize %u, size %u, picture id 0x%x", hdrsize,
+  GST_LOG_OBJECT (depay, "hdrsize %u, size %u, picture id 0x%x", hdridx+1,
       size, picture_id);
-  if (G_UNLIKELY (hdrsize >= size))
+  if (G_UNLIKELY (size <= hdridx))
     goto too_small;
 
   if (G_UNLIKELY (!self->started)) {
@@ -318,7 +335,7 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     self->stop_lost_events = FALSE;
   }
 
-  payload = gst_rtp_buffer_get_payload_subbuffer (rtp, hdrsize, -1);
+  payload = gst_rtp_buffer_get_payload_subbuffer (rtp, hdridx + 1, -1);
   gst_adapter_push (self->adapter, payload);
   self->last_picture_id = picture_id;
 
@@ -343,6 +360,12 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     out = gst_buffer_make_writable (out);
     /* Filter away all metas that are not sensible to copy */
     gst_rtp_drop_non_video_meta (self, out);
+    gst_buffer_add_video_vp8_meta_full (out,
+        picture_id & 0x7fff,
+        temporally_scaled,
+        ((tid_y_keyidx & 0x20) == 0x20), /* Unpack Y bit */
+        ((tid_y_keyidx & 0xc0) >> 6), /* Unpack TID */
+        tl0picidx);
     if ((header[0] & 0x01)) {
       GST_BUFFER_FLAG_SET (out, GST_BUFFER_FLAG_DELTA_UNIT);
 
