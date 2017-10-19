@@ -87,6 +87,10 @@ test_depay_gap_event_base (const DepayGapEventTestData *data,
   GstEvent *event;
   GstClockTime pts = 0;
   GstHarness *h = gst_harness_new ("rtpvp8depay");
+  if (send_lost_event == FALSE && expect_gap_event) {
+    /* Expect picture ID gaps to be concealed, so tell the element to do so. */
+    g_object_set (h->element, "hide-picture-id-gap", TRUE, NULL);
+  }
   gst_harness_set_src_caps_str (h, RTP_VP8_CAPS_STR);
 
   gst_harness_push (h, create_rtp_vp8_buffer (data[0].seq_num, data[0].picid, data[0].picid_bits, pts));
