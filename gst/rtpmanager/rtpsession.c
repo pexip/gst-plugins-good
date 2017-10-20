@@ -2673,6 +2673,13 @@ rtp_session_process_app (RTPSession * sess, GstRTCPPacket * packet,
   }
 }
 
+static void
+rtp_session_process_xr (RTPSession * sess, GstRTCPPacket * packet,
+    RTPPacketInfo * pinfo)
+{
+  GST_DEBUG ("received XR");
+}
+
 static gboolean
 rtp_session_request_local_key_unit (RTPSession * sess, RTPSource * src,
     guint32 media_ssrc, gboolean fir, GstClockTime current_time)
@@ -3009,6 +3016,9 @@ rtp_session_process_rtcp (RTPSession * sess, GstBuffer * buffer,
       case GST_RTCP_TYPE_PSFB:
         rtp_session_process_feedback (sess, &packet, &pinfo, current_time);
         break;
+      case GST_RTCP_TYPE_XR:
+	rtp_session_process_xr (sess, &packet, &pinfo);
+	break;
       default:
         GST_WARNING ("got unknown RTCP packet type: %d", type);
         break;
