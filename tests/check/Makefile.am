@@ -204,6 +204,7 @@ if USE_PLUGIN_MATROSKA
 check_matroska = \
 	elements/matroskademux \
 	elements/matroskamux \
+	elements/matroskamux_new \
 	elements/matroskaparse
 else
 check_matroska =
@@ -544,6 +545,7 @@ elements_jpegenc_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFL
 elements_jpegenc_LDADD = $(GST_PLUGINS_BASE_LIBS) -lgstapp-$(GST_API_VERSION) $(GST_BASE_LIBS) $(LDADD)
 
 elements_matroskamux_LDADD = $(GST_BASE_LIBS) $(LDADD) $(LIBM)
+elements_matroskamux_new_LDADD = $(GST_BASE_LIBS) $(LDADD) $(LIBM)
 
 elements_mpg123audiodec_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(AM_CFLAGS)
 elements_mpg123audiodec_LDADD = \
