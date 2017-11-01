@@ -353,6 +353,7 @@ GST_END_TEST;
 
 GST_START_TEST (test_encode_fresh_meta)
 {
+  gint i;
   GstBuffer *buffer;
   GstHarness *h = gst_harness_new ("vp8enc");
   gst_harness_set_src_caps (h, gst_caps_new_i420_full (320, 240, 25, 1, 1, 1));
@@ -364,11 +365,18 @@ GST_START_TEST (test_encode_fresh_meta)
   /* Attach bogus meta to input buffer */
   gst_buffer_add_video_vp8_meta_full (buffer, 0x5a5a, FALSE, FALSE, 0, 0);
 
-  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buffer));
+  for (i = 0; i < 2; i++) {
+    GstBuffer *out;
 
-  buffer = gst_harness_pull (h);
-  /* Ensure that output buffer has fresh meta */
-  verify_meta (buffer, 0, FALSE, TRUE, 0, 1);
+    fail_unless_equals_int (GST_FLOW_OK,
+        gst_harness_push (h, gst_buffer_ref (buffer)));
+
+    out = gst_harness_pull (h);
+    /* Ensure that output buffer has fresh meta */
+    verify_meta (out, i, FALSE, (i == 0), 0, i + 1);
+    gst_buffer_unref (out);
+  }
+
   gst_buffer_unref (buffer);
 
   gst_harness_teardown (h);
