@@ -341,6 +341,8 @@ static gboolean gst_vpx_enc_sink_event (GstVideoEncoder *
     video_encoder, GstEvent * event);
 static gboolean gst_vpx_enc_propose_allocation (GstVideoEncoder * encoder,
     GstQuery * query);
+static gboolean gst_vpx_enc_transform_meta (GstVideoEncoder * encoder,
+    GstVideoCodecFrame * frame, GstMeta * meta);
 
 #define parent_class gst_vpx_enc_parent_class
 G_DEFINE_TYPE_WITH_CODE (GstVPXEnc, gst_vpx_enc, GST_TYPE_VIDEO_ENCODER,
@@ -368,6 +370,7 @@ gst_vpx_enc_class_init (GstVPXEncClass * klass)
   video_encoder_class->finish = gst_vpx_enc_finish;
   video_encoder_class->sink_event = gst_vpx_enc_sink_event;
   video_encoder_class->propose_allocation = gst_vpx_enc_propose_allocation;
+  video_encoder_class->transform_meta = gst_vpx_enc_transform_meta;
 
   g_object_class_install_property (gobject_class, PROP_RC_END_USAGE,
       g_param_spec_enum ("end-usage", "Rate control mode",
@@ -2240,6 +2243,26 @@ gst_vpx_enc_propose_allocation (GstVideoEncoder * encoder, GstQuery * query)
 
   return GST_VIDEO_ENCODER_CLASS (parent_class)->propose_allocation (encoder,
       query);
+}
+
+static gboolean
+gst_vpx_enc_transform_meta (GstVideoEncoder * encoder,
+    GstVideoCodecFrame * frame, GstMeta * meta)
+{
+  const GstMetaInfo *info = meta->info;
+  const gchar *const *tags;
+
+  /* Do not copy GstVideoVP8Meta from input to output buffer */
+  if (info != GST_VIDEO_VP8_META_INFO) {
+   tags = gst_meta_api_type_get_tags (info->api);
+
+    if (!tags || (g_strv_length ((gchar **) tags) == 1
+        && gst_meta_api_type_has_tag (info->api,
+            g_quark_from_string (GST_META_TAG_VIDEO_STR))))
+      return TRUE;
+  }
+
+  return FALSE;
 }
 
 #endif /* HAVE_VP8_ENCODER || HAVE_VP9_ENCODER */

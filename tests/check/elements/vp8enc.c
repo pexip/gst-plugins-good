@@ -91,7 +91,7 @@ GST_START_TEST (test_encode_simple)
   for (i = 0; i < 20; i++) {
     GstBuffer *buffer = gst_harness_create_video_buffer_full (h, 0x0,
         320, 240, gst_util_uint64_scale (i, GST_SECOND, 25),
-	gst_util_uint64_scale (1, GST_SECOND, 25));
+        gst_util_uint64_scale (1, GST_SECOND, 25));
     fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buffer));
   }
 
@@ -182,13 +182,13 @@ GST_START_TEST (test_encode_simple_when_bitrate_set_to_zero)
 }
 GST_END_TEST;
 
-#define verify_meta(buffer, picid, ybit, tid, tl0picindex)              \
+#define verify_meta(buffer, picid, usets, ybit, tid, tl0picindex)       \
   G_STMT_START {                                                        \
     GstVideoVP8Meta *meta = gst_buffer_get_video_vp8_meta (buffer);     \
     fail_unless (meta != NULL);                                         \
                                                                         \
     fail_unless_equals_int (picid, meta->picture_id);                   \
-    fail_unless_equals_int (TRUE, meta->use_temporal_scaling);          \
+    fail_unless_equals_int (usets, meta->use_temporal_scaling);         \
     fail_unless_equals_int (ybit, meta->layer_sync);                    \
     fail_unless_equals_int (tid, meta->temporal_layer_id);              \
     fail_unless_equals_int (tl0picindex, meta->tl0picidx);              \
@@ -331,7 +331,7 @@ GST_START_TEST (test_encode_temporally_scaled)
 
     in = gst_harness_create_video_buffer_full (h, 0x42,
         320, 240, gst_util_uint64_scale (i, GST_SECOND, 30),
-	gst_util_uint64_scale (1, GST_SECOND, 30));
+        gst_util_uint64_scale (1, GST_SECOND, 30));
     gst_harness_push (h, in);
 
     out = gst_harness_pull (h);
@@ -342,10 +342,34 @@ GST_START_TEST (test_encode_temporally_scaled)
       fail_unless (GST_BUFFER_FLAG_IS_SET (out, GST_BUFFER_FLAG_DELTA_UNIT));
     fail_unless_equals_int (expected[i].droppable,
         GST_BUFFER_FLAG_IS_SET (out, GST_BUFFER_FLAG_DROPPABLE));
-    verify_meta(out, expected[i].picid, expected[i].ybit,
+    verify_meta(out, expected[i].picid, TRUE, expected[i].ybit,
         expected[i].tid, expected[i].tl0picidx);
     gst_buffer_unref (out);
   }
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_encode_fresh_meta)
+{
+  GstBuffer *buffer;
+  GstHarness *h = gst_harness_new ("vp8enc");
+  gst_harness_set_src_caps (h, gst_caps_new_i420_full (320, 240, 25, 1, 1, 1));
+
+  buffer = gst_harness_create_video_buffer_full (h, 0x0,
+    320, 240, gst_util_uint64_scale (0, GST_SECOND, 25),
+    gst_util_uint64_scale (1, GST_SECOND, 25));
+
+  /* Attach bogus meta to input buffer */
+  gst_buffer_add_video_vp8_meta_full (buffer, 0x5a5a, FALSE, FALSE, 0, 0);
+
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h, buffer));
+
+  buffer = gst_harness_pull (h);
+  /* Ensure that output buffer has fresh meta */
+  verify_meta (buffer, 0, FALSE, TRUE, 0, 1);
+  gst_buffer_unref (buffer);
 
   gst_harness_teardown (h);
 }
@@ -363,6 +387,7 @@ vp8enc_suite (void)
   tcase_add_test (tc_chain, test_encode_lag_in_frames);
   tcase_add_test (tc_chain, test_encode_simple_when_bitrate_set_to_zero);
   tcase_add_test (tc_chain, test_encode_temporally_scaled);
+  tcase_add_test (tc_chain, test_encode_fresh_meta);
 
   return s;
 }
