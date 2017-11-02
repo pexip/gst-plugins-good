@@ -318,7 +318,7 @@ GST_START_TEST (test_depay_temporally_scaled)
   pts += 33 * GST_MSECOND;
   gst_harness_push (h, create_rtp_vp8_buffer (1001, 10, BT_TS_PICID_NONE, pts));
   buffer = gst_harness_pull (h);
-  verify_meta (buffer, 32767, TRUE, TRUE, 1, 12);
+  verify_meta (buffer, 65535, TRUE, TRUE, 1, 12);
   gst_buffer_unref (buffer);
 
   /* Push temporally scaled packet (7bit picid) */

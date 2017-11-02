@@ -361,7 +361,7 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     /* Filter away all metas that are not sensible to copy */
     gst_rtp_drop_non_video_meta (self, out);
     gst_buffer_add_video_vp8_meta_full (out,
-        picture_id & 0x7fff,
+        picture_id == PICTURE_ID_NONE ? 0xffff : picture_id & 0x7fff,
         temporally_scaled,
         ((tid_y_keyidx & 0x20) == 0x20), /* Unpack Y bit */
         ((tid_y_keyidx & 0xc0) >> 6), /* Unpack TID */
