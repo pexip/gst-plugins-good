@@ -497,6 +497,26 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
   return out;
 }
 
+static gboolean
+foreach_metadata_drop (GstBuffer * buf, GstMeta ** meta, gpointer user_data)
+{
+  GstElement *element = user_data;
+  const GstMetaInfo *info = (*meta)->info;
+
+  if (info == GST_VIDEO_VP8_META_INFO) {
+    GST_DEBUG_OBJECT (element, "dropping metadata %s", g_type_name (info->api));
+    *meta = NULL;
+  }
+
+  return TRUE;
+}
+
+static void
+gst_rtp_vp8_drop_vp8_meta (gpointer element, GstBuffer * buf)
+{
+  gst_buffer_foreach_meta (buf, foreach_metadata_drop, element);
+}
+
 static guint
 gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
     guint offset, GstBuffer * buffer, gsize buffer_size, gsize max_payload_len,
@@ -536,6 +556,7 @@ gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
   sub = gst_buffer_copy_region (buffer, GST_BUFFER_COPY_ALL, offset, available);
 
   gst_rtp_copy_video_meta (self, header, buffer);
+  gst_rtp_vp8_drop_vp8_meta (self, header);
 
   out = gst_buffer_append (header, sub);
 

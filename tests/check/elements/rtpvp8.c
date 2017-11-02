@@ -476,6 +476,7 @@ GST_START_TEST (test_pay_with_meta)
   };
   const struct with_meta_test_data *test_data = &with_meta_test_data[__i__];
   GstBuffer *buffer, *outbuffer;
+  GstVideoVP8Meta *meta;
   GstMapInfo map = GST_MAP_INFO_INIT;
   GstHarness *h = gst_harness_new ("rtpvp8pay");
   gst_harness_set_src_caps_str (h, "video/x-vp8");
@@ -505,6 +506,9 @@ GST_START_TEST (test_pay_with_meta)
   outbuffer = gst_harness_pull (h);
   fail_unless (gst_buffer_map (outbuffer, &map, GST_MAP_READ));
   fail_unless (map.data != NULL);
+
+  meta = gst_buffer_get_video_vp8_meta (outbuffer);
+  fail_unless (meta == NULL);
 
   /* check buffer size and content */
   fail_unless_equals_int (12 + test_data->vp8_payload_header_size + sizeof (vp8_bitstream_payload), map.size); /* RTP + VP8 + VP8 bistream Payload */
