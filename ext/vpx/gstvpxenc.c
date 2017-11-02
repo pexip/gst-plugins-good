@@ -1984,18 +1984,13 @@ gst_vpx_enc_process (GstVPXEnc * encoder)
     else
       GST_BUFFER_FLAG_UNSET (buffer, GST_BUFFER_FLAG_DROPPABLE);
 
-
     if (layer_id == 0) {
       /* Allocate a new tl0picidx if this is layer 0 */
       tl0picidx = ++encoder->tl0picidx;
     }
 
-    gst_buffer_add_video_vp8_meta_full (buffer,
-        frame->system_frame_number & 0x7fff,
-	(encoder->cfg.ts_periodicity != 0),
-	layer_sync,
-	layer_id,
-	tl0picidx);
+    vpx_enc_class->preflight_buffer (encoder, frame, buffer,
+        layer_sync, layer_id, tl0picidx);
 
     if (invisible) {
       ret =

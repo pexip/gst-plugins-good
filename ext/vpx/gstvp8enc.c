@@ -61,6 +61,7 @@
 
 #include <gst/tag/tag.h>
 #include <gst/video/video.h>
+#include <gst/video/gstvideovp8meta.h>
 #include <string.h>
 
 #include "gstvp8utils.h"
@@ -115,6 +116,9 @@ static void gst_vp8_enc_apply_frame_temporal_settings (GstVPXEnc * enc,
 static void gst_vp8_enc_get_frame_temporal_settings (GstVPXEnc * enc,
     GstVideoCodecFrame * frame, guint * layer_id, guint8 * tl0picidx,
     gboolean * layer_sync);
+static void gst_vp8_enc_preflight_buffer (GstVPXEnc * enc,
+    GstVideoCodecFrame * frame, GstBuffer * buffer,
+    gboolean layer_sync, guint layer_id, guint8 tl0picidx);
 
 static GstFlowReturn gst_vp8_enc_pre_push (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame);
@@ -179,6 +183,7 @@ gst_vp8_enc_class_init (GstVP8EncClass * klass)
       gst_vp8_enc_apply_frame_temporal_settings;
   vpx_encoder_class->get_frame_temporal_settings =
       gst_vp8_enc_get_frame_temporal_settings;
+  vpx_encoder_class->preflight_buffer = gst_vp8_enc_preflight_buffer;
 
   GST_DEBUG_CATEGORY_INIT (gst_vp8enc_debug, "vp8enc", 0, "VP8 Encoder");
 }
@@ -396,6 +401,19 @@ gst_vp8_enc_get_frame_temporal_settings (GstVPXEnc * enc,
   *layer_sync = user_data->layer_sync;
 
   return;
+}
+
+static void
+gst_vp8_enc_preflight_buffer (GstVPXEnc * enc,
+    GstVideoCodecFrame * frame, GstBuffer * buffer,
+    gboolean layer_sync, guint layer_id, guint8 tl0picidx)
+{
+    gst_buffer_add_video_vp8_meta_full (buffer,
+        frame->system_frame_number & 0x7fff,
+        (enc->cfg.ts_periodicity != 0),
+        layer_sync,
+        layer_id,
+        tl0picidx);
 }
 
 static guint64

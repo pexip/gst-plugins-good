@@ -152,6 +152,10 @@ struct _GstVPXEncClass
   void (*get_frame_temporal_settings) (GstVPXEnc *enc,
       GstVideoCodecFrame *frame, guint * layer_id, guint8 *tl0picidx,
       gboolean *layer_sync);
+  /* preflight buffer */
+  void (*preflight_buffer) (GstVPXEnc *enc,
+      GstVideoCodecFrame *frame, GstBuffer *buffer,
+      gboolean layer_sync, guint layer_id, guint8 tl0picidx);
 };
 
 GType gst_vpx_enc_get_type (void);
