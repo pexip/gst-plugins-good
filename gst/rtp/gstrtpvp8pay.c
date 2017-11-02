@@ -446,9 +446,9 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
     gint index;
 
     guint16 picture_id = self->picture_id & 0x7FFF;
-    if (meta) {
-      /* Prefer picture ID from meta */
-      picture_id = meta->picture_id & 0x7FFF;
+    if (meta && meta->picture_id < 0x8000) {
+      /* Prefer picture ID from meta if it's valid */
+      picture_id = meta->picture_id;
     }
 
     /* Enable X=1 */

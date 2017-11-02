@@ -353,7 +353,7 @@ GST_START_TEST (test_depay_temporally_scaled)
 }
 GST_END_TEST;
 
-/* PictureID emum is not exported */
+/* PictureID enum is not exported */
 enum PictureID {
   VP8_PAY_NO_PICTURE_ID = 0,
   VP8_PAY_PICTURE_ID_7BITS = 1,
@@ -548,6 +548,63 @@ GST_START_TEST (test_pay_with_meta)
 }
 GST_END_TEST;
 
+GST_START_TEST (test_pay_meta_no_picid)
+{
+  guint8 vp8_bitstream_payload[] = {
+    0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00, 0x90, 0x00, 0x06, 0x47,
+    0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21, 0x00
+  };
+  gint i, last_picid = 0;
+  GstBuffer *buffer, *outbuffer;
+  GstHarness *h = gst_harness_new ("rtpvp8pay");
+  g_object_set (h->element, "picture-id-mode", VP8_PAY_PICTURE_ID_15BITS, NULL);
+  gst_harness_set_src_caps_str (h, "video/x-vp8");
+
+  buffer = gst_buffer_new_wrapped (g_memdup (vp8_bitstream_payload,
+      sizeof (vp8_bitstream_payload)),
+      sizeof (vp8_bitstream_payload));
+
+  /* Add meta indicating missing picture ID */
+  gst_buffer_add_video_vp8_meta_full (buffer, 0xFFFF, FALSE, FALSE, 0, 0);
+
+  for (i = 0; i < 2; i++) {
+    GstMapInfo map = GST_MAP_INFO_INIT;
+
+    gst_harness_push (h, gst_buffer_ref (buffer));
+
+    outbuffer = gst_harness_pull (h);
+    fail_unless (gst_buffer_map (outbuffer, &map, GST_MAP_READ));
+    fail_unless (map.data != NULL);
+
+    /* check buffer size and content */
+    fail_unless_equals_int (16 + sizeof (vp8_bitstream_payload), map.size);
+
+    fail_unless_equals_int (0x90, map.data[12]);
+    fail_unless_equals_int (0x80, map.data[13]);
+
+    /* Initial picture ID is random, so collect the first one
+     * and assert that the second one is correct. */
+    if (i == 0) {
+      last_picid = ((map.data[14] << 8) | map.data[15]) & 0x7fff;
+    } else {
+      gint expected = last_picid + 1;
+      if (last_picid == 0x7fff)
+        expected = 0;
+
+      fail_unless_equals_int (expected,
+          ((map.data[14] << 8) | map.data[15]) & 0x7fff);
+    }
+
+    gst_buffer_unmap (outbuffer, &map);
+    gst_buffer_unref (outbuffer);
+  }
+
+  gst_buffer_unref (buffer);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 rtpvp8_suite (void)
 {
@@ -565,6 +622,7 @@ rtpvp8_suite (void)
   suite_add_tcase (s, (tc_chain = tcase_create ("vp8pay")));
   tcase_add_loop_test (tc_chain, test_pay_no_meta, 0 , G_N_ELEMENTS(no_meta_test_data));
   tcase_add_loop_test (tc_chain, test_pay_with_meta, 0 , G_N_ELEMENTS(with_meta_test_data));
+  tcase_add_test (tc_chain, test_pay_meta_no_picid);
 
   return s;
 }
