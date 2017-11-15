@@ -15490,7 +15490,7 @@ qtdemux_audio_caps (GstQTDemux * qtdemux, QtDemuxStream * stream,
   name = gst_structure_get_name (s);
   if (g_str_has_prefix (name, "audio/x-raw")) {
     stream->need_clip = TRUE;
-    stream->max_buffer_size = 4096 * entry->bytes_per_frame;
+    stream->max_buffer_size = 9600 * entry->bytes_per_frame;
     GST_DEBUG ("setting max buffer size to %d", stream->max_buffer_size);
   }
   return caps;
