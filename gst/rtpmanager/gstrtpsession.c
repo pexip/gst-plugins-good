@@ -286,6 +286,7 @@ struct _GstRtpSessionPrivate
   gboolean rtcp_sync_send_time;
 
   guint rtx_count;
+  guint key_unit_requests_count;
 };
 
 /* callbacks to handle actions from the session manager */
@@ -862,6 +863,7 @@ gst_rtp_session_init (GstRtpSession * rtpsession)
   rtpsession->priv->thread_stopped = TRUE;
 
   rtpsession->priv->rtx_count = 0;
+  rtpsession->priv->key_unit_requests_count = 0;
 
   rtpsession->priv->ntp_time_source = DEFAULT_NTP_TIME_SOURCE;
 }
@@ -1023,7 +1025,9 @@ gst_rtp_session_create_stats (GstRtpSession * rtpsession)
   GstStructure *s;
 
   g_object_get (rtpsession->priv->session, "stats", &s, NULL);
-  gst_structure_set (s, "rtx-count", G_TYPE_UINT, rtpsession->priv->rtx_count,
+  gst_structure_set (s,
+      "rtx-count", G_TYPE_UINT, rtpsession->priv->rtx_count,
+      "key-unit-requests-count", G_TYPE_UINT, rtpsession->priv->key_unit_requests_count,
       NULL);
 
   return s;
@@ -1816,6 +1820,10 @@ gst_rtp_session_event_recv_rtp_src (GstPad * pad, GstObject * parent,
           gst_structure_get_uint (s, "payload", &pt)) {
         if (gst_rtp_session_request_remote_key_unit (rtpsession, ssrc, pt, s))
           forward = FALSE;
+
+        GST_RTP_SESSION_LOCK (rtpsession);
+        rtpsession->priv->key_unit_requests_count++;
+        GST_RTP_SESSION_UNLOCK (rtpsession);
       } else if (gst_structure_has_name (s, "GstRTPRetransmissionRequest")) {
         GstClockTime running_time;
         guint seqnum, delay, deadline, max_delay, avg_rtt;
