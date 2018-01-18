@@ -863,6 +863,7 @@ GST_START_TEST (test_rtxsender_caps)
   guint master_pt = 96;
   guint rtx_ssrc = 7777777;
   guint rtx_pt = 99;
+  gint i;
   GstStructure *pt_map, *ssrc_map;
   GstHarness *h = gst_harness_new ("rtprtxsend");
   gulong probe_id = gst_pad_add_probe (h->sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
@@ -888,7 +889,7 @@ GST_START_TEST (test_rtxsender_caps)
 
   /* Asking to retransmit the buffer twice. RTX caps event should be pushed
      only once */
-  for (gint i = 0; i < 2; ++i) {
+  for (i = 0; i < 2; ++i) {
     gst_harness_push_upstream_event (h,
         create_rtx_event (master_ssrc, master_pt, 100));
     pull_and_verify (h, TRUE, rtx_ssrc, rtx_pt, 100);
@@ -897,7 +898,7 @@ GST_START_TEST (test_rtxsender_caps)
 
   /* Pushing 3 buffers, master stream caps event should be pushed
      only once */
-  for (gint i = 0; i < 3; ++i) {
+  for (i = 0; i < 3; ++i) {
     push_pull_and_verify (h,
         create_rtp_buffer (master_ssrc, master_pt, 100 + i),
         FALSE, master_ssrc, master_pt, 100 + i);
@@ -921,6 +922,8 @@ GST_START_TEST (test_rtxsender_caps_multi_ssrc)
   guint rtx_ssrc1 = 8888888;
   guint rtx_pt = 99;
   GstCaps *caps;
+  gint i;
+
   GstStructure *pt_map, *ssrc_map;
   GstHarness *h = gst_harness_new ("rtprtxsend");
   gulong probe_id = gst_pad_add_probe (h->sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
@@ -960,7 +963,7 @@ GST_START_TEST (test_rtxsender_caps_multi_ssrc)
 
   /* Asking to retransmit the same buffer twice. RTX caps event should be pushed
      only once */
-  for (gint i = 0; i < 2; ++i) {
+  for (i = 0; i < 2; ++i) {
     gst_harness_push_upstream_event (h,
         create_rtx_event (master_ssrc0, master_pt, 100));
     pull_and_verify (h, TRUE, rtx_ssrc0, rtx_pt, 100);
@@ -968,7 +971,7 @@ GST_START_TEST (test_rtxsender_caps_multi_ssrc)
   }
 
   /* Doing the same for another ssrc */
-  for (gint i = 0; i < 2; ++i) {
+  for (i = 0; i < 2; ++i) {
     gst_harness_push_upstream_event (h,
         create_rtx_event (master_ssrc1, master_pt, 200));
     pull_and_verify (h, TRUE, rtx_ssrc1, rtx_pt, 200);

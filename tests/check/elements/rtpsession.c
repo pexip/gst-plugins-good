@@ -1075,6 +1075,7 @@ GST_START_TEST (test_stats_transmission_duration)
   GValueArray *source_stats;
   gboolean stats_verified = FALSE;
   GstCaps *caps = generate_caps();
+  guint i;
 
   /* use testclock as the systemclock to capture the rtcp thread waits */
   gst_system_clock_set_default (GST_CLOCK (testclock));
@@ -1126,7 +1127,7 @@ GST_START_TEST (test_stats_transmission_duration)
   source_stats = g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
   fail_unless (source_stats);
 
-  for (guint i = 0; i < source_stats->n_values; i++) {
+  for (i = 0; i < source_stats->n_values; i++) {
     GstStructure *s = g_value_get_boxed (g_value_array_get_nth (source_stats, i));
     gboolean internal;
     gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
@@ -1166,6 +1167,7 @@ GST_START_TEST (test_stats_transmission_duration_reordering)
   GValueArray *source_stats;
   gboolean stats_verified = FALSE;
   GstCaps *caps = generate_caps();
+  guint i;
 
   /* use testclock as the systemclock to capture the rtcp thread waits */
   gst_system_clock_set_default (GST_CLOCK (testclock));
@@ -1218,7 +1220,7 @@ GST_START_TEST (test_stats_transmission_duration_reordering)
   source_stats = g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
   fail_unless (source_stats);
 
-  for (guint i = 0; i < source_stats->n_values; i++) {
+  for (i = 0; i < source_stats->n_values; i++) {
     GstStructure *s = g_value_get_boxed (g_value_array_get_nth (source_stats, i));
     gboolean internal;
     gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
