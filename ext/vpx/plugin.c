@@ -56,6 +56,11 @@ plugin_init (GstPlugin * plugin)
   return TRUE;
 }
 
+/* FIXME: hack for meson, fix better! */
+#ifndef GST_ISA_SUFFIX
+#  define GST_ISA_SUFFIX(name) name
+#endif
+
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     GST_ISA_SUFFIX (vpx),
