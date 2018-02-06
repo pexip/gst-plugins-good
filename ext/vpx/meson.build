@@ -88,14 +88,16 @@ foreach isa_flags : pex_isas
   isa = isa_flags[0]
   flags = isa_flags[1]
 
-  vpxisa_dep = dependency('vpx-@0@'.format(isa))
+  vpxisa_dep = dependency('vpx-@0@'.format(isa), required : false)
 
-  gstvpxisa = shared_library('gstvpx_' + isa,
-    vpx_sources,
-    c_args : gst_plugins_good_args + vpx_args + flags,
-    include_directories: [configinc],
-    dependencies : [gstbase_dep, gsttag_dep, gstvideo_dep, vpxisa_dep],
-    install : true,
-    install_dir : plugins_install_dir_isa + isa,
-  )
+  if vpxisa_dep.found()
+    gstvpxisa = shared_library('gstvpx_' + isa,
+      vpx_sources,
+      c_args : gst_plugins_good_args + vpx_args + flags,
+      include_directories: [configinc],
+      dependencies : [gstbase_dep, gsttag_dep, gstvideo_dep, vpxisa_dep],
+      install : true,
+      install_dir : plugins_install_dir_isa + isa,
+    )
+  endif
 endforeach
