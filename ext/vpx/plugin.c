@@ -56,6 +56,19 @@ plugin_init (GstPlugin * plugin)
   return TRUE;
 }
 
+/* Pexip Spesific */
+#if defined (GST_ISA_SSE)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _sse)
+#elif defined (GST_ISA_AVX)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx)
+#elif defined (GST_ISA_AVX2)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx2)
+#elif defined (GST_ISA_AVX512)
+#  define GST_ISA_SUFFIX(name) G_PASTE (name, _avx512)
+#else
+#  define GST_ISA_SUFFIX(name) name
+#endif
+
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
     GST_ISA_SUFFIX (vpx),
