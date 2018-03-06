@@ -675,7 +675,18 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
               GST_DEBUG_OBJECT (rtx, "Packet #%" G_GUINT16_FORMAT
                   " dropped due to full bucket", item->seqnum);
             }
+          } else {
+            BufferQueueItem *high_buf, *low_buf;
+            high_buf = g_sequence_get (g_sequence_iter_prev (
+                    g_sequence_get_end_iter (data->queue)));
+            low_buf = g_sequence_get (g_sequence_get_begin_iter (data->queue));
+            GST_INFO_OBJECT (rtx, "Packet #%" G_GUINT16_FORMAT
+                " not found in the queue (contains: #%" G_GUINT16_FORMAT
+                " -> #%" G_GUINT16_FORMAT ")",
+                seqnum, low_buf->seqnum, high_buf->seqnum);
           }
+        } else {
+          GST_INFO_OBJECT (rtx, "ssrc: %X not found in map", ssrc);
         }
         GST_OBJECT_UNLOCK (rtx);
 
