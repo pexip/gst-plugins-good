@@ -54,7 +54,7 @@ static GOptionEntry entries[] = {
 static GMainLoop *loop;
 static GstElement *pipeline;
 static GstElement *src, *capsfilter;
-static gint index = 0;
+static gint def_resolutions_idx = 0;
 
 static gboolean
 bus_callback (GstBus * bus, GstMessage * message, gpointer data)
@@ -88,16 +88,16 @@ change_caps (gpointer data)
   GStrv res;
   gchar *caps_str;
 
-  if (!resolutions[index]) {
+  if (!resolutions[def_resolutions_idx]) {
     gst_element_send_event (pipeline, gst_event_new_eos ());
     return FALSE;
   }
 
-  g_print ("Setting resolution to '%s'\n", resolutions[index]);
+  g_print ("Setting resolution to '%s'\n", resolutions[def_resolutions_idx]);
 
-  res = g_strsplit (resolutions[index++], "x", 2);
+  res = g_strsplit (resolutions[def_resolutions_idx++], "x", 2);
   if (!res[0] || !res[1]) {
-    g_warning ("Can't parse resolution: %s", resolutions[index - 1]);
+    g_warning ("Can't parse resolution: %s", resolutions[def_resolutions_idx - 1]);
     g_strfreev (res);
     return TRUE;
   }
