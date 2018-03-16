@@ -88,6 +88,7 @@ struct _GstRtpRtxSend
   gint stuffing_max_bucket_size;
   gint stuffing_bucket_size;
   GstClockTime stuffing_prev_time;
+  gint stuffing_max_packet_size;
 };
 
 struct _GstRtpRtxSendClass
