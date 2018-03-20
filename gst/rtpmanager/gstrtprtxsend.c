@@ -1032,6 +1032,7 @@ gst_rtp_rtx_send_push_out_and_stuff (GstRtpRtxSend * rtx, GstBuffer * buffer,
   gint n_stuffing;
   guint8 padlen = 0;
   gint buffer_size = gst_buffer_get_size (buffer);
+  gint i;
 
   gst_buffer_ref (buffer);
   gst_rtp_rtx_send_push_out (rtx, buffer, NULL);
@@ -1057,7 +1058,7 @@ gst_rtp_rtx_send_push_out_and_stuff (GstRtpRtxSend * rtx, GstBuffer * buffer,
       rtx_data->rtx_ssrc, buffer_size, padlen, rtx->stuffing_max_packet_size);
 
   GST_OBJECT_LOCK (rtx);
-  for (gint i = 0; i < n_stuffing; i++) {
+  for (i = 0; i < n_stuffing; i++) {
     GstBuffer *rtx_buf = gst_rtp_rtx_buffer_new (rtx, buffer, padlen);
     GstCaps *rtx_buf_caps = gst_caps_ref (rtx_data->rtx_caps);
     gst_rtp_rtx_send_stuffing_token_bucket (rtx, rtx_buf, NULL);
