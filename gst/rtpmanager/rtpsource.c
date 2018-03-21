@@ -1159,13 +1159,6 @@ update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
   expected = src->stats.max_seq + 1;
   delta = gst_rtp_buffer_compare_seqnum (expected, seqnr);
 
-  /* due to jitter, we might not get the first packet in the stream first.
-     update the base_seq in that case */
-  if (stats->cycles == 0 && seqnr < src->stats.base_seq) {
-    GST_INFO ("Updating seqnr-base from %u to %u", src->stats.base_seq, seqnr);
-    src->stats.base_seq = seqnr;
-  }
-
   if (is_receive) {
     /* if we are still on probation, check seqnum */
     if (src->curr_probation) {
@@ -1239,6 +1232,13 @@ update_receiver_stats (RTPSource * src, RTPPacketInfo * pinfo,
       GST_INFO ("duplicate or reordered packet (seqnr %u, expected %u)",
           seqnr, expected);
     }
+  }
+
+  /* due to jitter, we might not get the first packet in the stream first.
+     update the base_seq in that case */
+  if (stats->cycles == 0 && seqnr < src->stats.base_seq) {
+    GST_INFO ("Updating seqnr-base from %u to %u", src->stats.base_seq, seqnr);
+    src->stats.base_seq = seqnr;
   }
 
   rtptime = pinfo->rtptime;
