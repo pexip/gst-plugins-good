@@ -887,7 +887,7 @@ GST_START_TEST (test_late_packets_still_makes_lost_events)
           generate_test_buffer_full (now,
               seqnum, seqnum * TEST_RTP_TS_DURATION)));
 
-  /* we should now receive packet-lost-events for the gap 
+  /* we should now receive packet-lost-events for the gap
    * FIXME: The timeout and duration here are a bit crap...
    */
   verify_lost_event (h, next_seqnum, 3400 * GST_MSECOND, 6500 * GST_MSECOND);
@@ -2098,6 +2098,7 @@ start_test_rtx_large_packet_spacing (GstHarness *h,
     gint latency_ms, gint frame_dur_ms, gint rtx_rtt_ms,
     guint16 *dst_lost_seq, GstClockTime *dst_now)
 {
+  gint i;
   gint seq, frame;
   GstBuffer *buffer;
   GstClockTime now, lost_packet_time;
@@ -2126,7 +2127,7 @@ start_test_rtx_large_packet_spacing (GstHarness *h,
   }
 
   /* drop GstEventStreamStart & GstEventCaps & GstEventSegment & latency-changed event */
-  for (gint i = 0; i < 4; i++)
+  for (i = 0; i < 4; i++)
     gst_event_unref (gst_harness_pull_event (h));
   /* drop reconfigure event */
   gst_event_unref (gst_harness_pull_upstream_event (h));
@@ -2232,6 +2233,8 @@ GST_START_TEST (test_rtx_large_packet_spacing_does_not_reset_jitterbuffer)
   gint frame_dur_ms = 50;
   gint rtx_rtt_ms = 5;
   gint seq;
+  gint i;
+
   GstBuffer *buffer;
   GstClockTime now, lost_packet_time;
   GstClockTime frame_dur = frame_dur_ms * GST_MSECOND;
@@ -2258,7 +2261,7 @@ GST_START_TEST (test_rtx_large_packet_spacing_does_not_reset_jitterbuffer)
 
   (void)rtx_rtt_ms;
   /* drop GstEventStreamStart & GstEventCaps & GstEventSegment & latency-changed event */
-  for (gint i = 0; i < 4; i++)
+  for (i = 0; i < 4; i++)
     gst_event_unref (gst_harness_pull_event (h));
   /* drop reconfigure event */
   gst_event_unref (gst_harness_pull_upstream_event (h));
