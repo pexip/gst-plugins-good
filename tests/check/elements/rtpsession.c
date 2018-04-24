@@ -1433,10 +1433,10 @@ GST_START_TEST (test_creating_srrr)
   GstRTCPPacket packet;
   guint pse_ssrc = 0;
 
-  /* Connect to on-creating-srrr which will append 8 bytes of
+  /* Connect to on-creating-sr-rr which will append 8 bytes of
    * profile-specific extension data */
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
-  g_signal_connect (h->internal_session, "on-creating-srrr",
+  g_signal_connect (h->internal_session, "on-creating-sr-rr",
       G_CALLBACK (_creating_srrr), NULL);
 
   /* receive some buffers */
@@ -1456,9 +1456,9 @@ GST_START_TEST (test_creating_srrr)
       gst_rtcp_packet_get_profile_specific_ext_length (&packet));
   gst_rtcp_buffer_unmap (&rtcp);
 
-  /* now "receive" the same RTCP buffer into the session to test on-ssrc-pse
-   * signal */
-  g_signal_connect (h->internal_session, "on-ssrc-pse",
+  /* now "receive" the same RTCP buffer into the session to test
+   * on-ssrc-profile-specific-ext signal */
+  g_signal_connect (h->internal_session, "on-ssrc-profile-specific-ext",
       G_CALLBACK (_ssrc_pse), &pse_ssrc);
   fail_unless_equals_int (0, pse_ssrc);
   fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
