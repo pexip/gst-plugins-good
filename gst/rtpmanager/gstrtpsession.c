@@ -515,9 +515,8 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
    */
   gst_rtp_session_signals[SIGNAL_CLEAR_PT_MAP] =
       g_signal_new ("clear-pt-map", G_TYPE_FROM_CLASS (klass),
-      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION,
-      G_STRUCT_OFFSET (GstRtpSessionClass, clear_pt_map),
-      NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 0, G_TYPE_NONE);
+      G_SIGNAL_ACTION, G_STRUCT_OFFSET (GstRtpSessionClass, clear_pt_map),
+      NULL, NULL, g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, 0, G_TYPE_NONE);
   /**
    * GstRtpSession::send-bye:
    * @sess: the object which received the signal
@@ -1750,7 +1749,7 @@ gst_rtp_session_event_recv_rtp_sink (GstPad * pad, GstObject * parent,
 
 static gboolean
 gst_rtp_session_request_remote_key_unit (GstRtpSession * rtpsession,
-    guint32 ssrc, guint payload, const GstStructure * ev_s)
+    guint32 ssrc, guint payload, gboolean all_headers, gint count)
 {
   GstCaps *caps;
 
@@ -1758,42 +1757,23 @@ gst_rtp_session_request_remote_key_unit (GstRtpSession * rtpsession,
 
   if (caps) {
     const GstStructure *s = gst_caps_get_structure (caps, 0);
-    gboolean all_headers = FALSE;
-    gboolean pli, xpli, fir;
+    gboolean pli;
+    gboolean fir;
 
-    gst_structure_get_boolean (ev_s, "all-headers", &all_headers);
     pli = gst_structure_has_field (s, "rtcp-fb-nack-pli");
-    xpli = gst_structure_has_field (s, "rtcp-fb-x-message-x-pli");
     fir = gst_structure_has_field (s, "rtcp-fb-ccm-fir") && all_headers;
 
     /* Google Talk uses FIR for repair, so send it even if we just want a
      * regular PLI */
-    if (!pli && !xpli &&
+    if (!pli &&
         gst_structure_has_field (s, "rtcp-fb-x-gstreamer-fir-as-repair"))
       fir = TRUE;
 
     gst_caps_unref (caps);
 
-    if (fir) {
-      gint count = -1;
-      if (gst_structure_get_int (ev_s, "count", &count) && count < 0)
-        count += G_MAXINT;    /* Make sure count is positive if present */
-
-      return rtp_session_request_fir (rtpsession->priv->session, ssrc, count);
-    } else if (xpli) {
-      guint64 sfr = G_MAXUINT64;
-      gint reqid = -1;
-      gst_structure_get_uint64 (ev_s, "sfr", &sfr);
-      if (gst_structure_get_int (ev_s, "reqid", &reqid)) {
-        g_assert_cmpint (reqid, >=, 0);
-        g_assert_cmpint (reqid, <=, G_MAXUINT16);
-      }
-
-      return rtp_session_request_xpli (rtpsession->priv->session, ssrc,
-          reqid, sfr);
-    } else if (pli) {
-      return rtp_session_request_pli (rtpsession->priv->session, ssrc);
-    }
+    if (pli || fir)
+      return rtp_session_request_key_unit (rtpsession->priv->session, ssrc,
+          fir, count);
   }
 
   return FALSE;
@@ -1818,7 +1798,14 @@ gst_rtp_session_event_recv_rtp_src (GstPad * pad, GstObject * parent,
       if (gst_structure_has_name (s, "GstForceKeyUnit") &&
           gst_structure_get_uint (s, "ssrc", &ssrc) &&
           gst_structure_get_uint (s, "payload", &pt)) {
-        if (gst_rtp_session_request_remote_key_unit (rtpsession, ssrc, pt, s))
+        gboolean all_headers = FALSE;
+        gint count = -1;
+
+        gst_structure_get_boolean (s, "all-headers", &all_headers);
+        if (gst_structure_get_int (s, "count", &count) && count < 0)
+          count += G_MAXINT;    /* Make sure count is positive if present */
+        if (gst_rtp_session_request_remote_key_unit (rtpsession, ssrc, pt,
+                all_headers, count))
           forward = FALSE;
 
         GST_RTP_SESSION_LOCK (rtpsession);
