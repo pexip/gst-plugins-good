@@ -616,7 +616,8 @@ rtp_session_class_init (RTPSessionClass * klass)
           G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_STATS_NOTIFY_MIN_INTERVAL,
-      g_param_spec_uint ("stats-min-interval", "Minimum stats interval",
+      g_param_spec_uint ("stats-notify-min-interval",
+          "Stats notify minimum interval",
           "Minimum interval between emitting notify signal for stats (in ms)",
           0, G_MAXUINT, DEFAULT_STATS_NOTIFY_MIN_INTERVAL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));

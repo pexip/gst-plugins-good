@@ -1272,8 +1272,8 @@ GST_START_TEST (test_report_stats_only_on_regular_rtcp)
   gint stats_callback_count = 0;
   gint i;
 
-  g_object_set (h->internal_session,
-      "probation", 1, "rtcp-reduced-size", TRUE, NULL);
+  g_object_set (h->internal_session, "probation", 1, "rtcp-reduced-size", TRUE,
+      "stats-notify-min-interval", 3000, NULL);
   g_signal_connect (h->session, "notify::stats",
       G_CALLBACK (count_report_stats), &stats_callback_count);
 
