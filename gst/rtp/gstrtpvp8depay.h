@@ -58,6 +58,7 @@ struct _GstRtpVP8Depay
   gboolean stop_lost_events;
   GstEvent *last_lost_event;
   gboolean waiting_for_keyframe;
+  gboolean last_pushed_was_lost_event;
   gint last_profile;
   gint last_width;
   gint last_height;
