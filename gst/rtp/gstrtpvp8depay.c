@@ -106,6 +106,7 @@ gst_rtp_vp8_depay_init (GstRtpVP8Depay * self)
 {
   self->adapter = gst_adapter_new ();
   self->started = FALSE;
+  self->last_pushed_was_lost_event = FALSE;
 }
 
 static void
@@ -183,6 +184,7 @@ send_last_lost_event (GstRtpVP8Depay * self)
         self->last_lost_event);
     gst_event_unref (self->last_lost_event);
     self->last_lost_event = NULL;
+    self->last_pushed_was_lost_event = TRUE;
   }
 }
 
@@ -194,7 +196,8 @@ send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
   gboolean fwd_last_lost_event = FALSE;
   gboolean create_lost_event = FALSE;
 
-  if (self->last_picture_id == PICTURE_ID_NONE)
+  if (self->last_picture_id == PICTURE_ID_NONE ||
+      self->last_picture_id == new_picture_id)
     return;
 
   if (new_picture_id == PICTURE_ID_NONE) {
@@ -207,7 +210,8 @@ send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
   } else if (picture_id_compare (self->last_picture_id, new_picture_id) != 1) {
     reason = "picture id gap";
     fwd_last_lost_event = TRUE;
-    create_lost_event = TRUE;
+    /* Only create a new one if we just didn't push a lost event */
+    create_lost_event = self->last_pushed_was_lost_event == FALSE;
   }
 
   if (self->last_lost_event) {
@@ -329,11 +333,12 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     }
 
     GST_LOG_OBJECT (depay, "Found the start of the frame");
-    send_lost_event_if_needed (self, picture_id, GST_BUFFER_PTS (rtp->buffer));
 
     self->started = TRUE;
     self->stop_lost_events = FALSE;
   }
+
+  send_lost_event_if_needed (self, picture_id, GST_BUFFER_PTS (rtp->buffer));
 
   payload = gst_rtp_buffer_get_payload_subbuffer (rtp, hdridx + 1, -1);
   gst_adapter_push (self->adapter, payload);
@@ -410,6 +415,9 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
 
     if (picture_id != PICTURE_ID_NONE)
       self->stop_lost_events = TRUE;
+
+    self->last_pushed_was_lost_event = FALSE;
+
     return out;
   }
 
@@ -488,6 +496,8 @@ gst_rtp_vp8_depay_packet_lost (GstRTPBaseDepayload * depay, GstEvent * event)
     self->last_lost_event = gst_event_ref (event);
     return TRUE;
   }
+
+  self->last_pushed_was_lost_event = TRUE;
 
   return
       GST_RTP_BASE_DEPAYLOAD_CLASS
