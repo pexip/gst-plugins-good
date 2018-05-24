@@ -1115,7 +1115,16 @@ gst_flv_mux_buffer_to_tag_internal (GstFlvMux * mux, GstBuffer * buffer,
   data[2] = ((size - 11 - 4) >> 8) & 0xff;
   data[3] = ((size - 11 - 4) >> 0) & 0xff;
 
+  if (dts < mux->last_dts) {
+    GST_WARNING_OBJECT (pad, "Got backwards dts! (%u < %u) "
+        "Try to increase latency! Overriding with previous dts.",
+        dts, mux->last_dts);
+    dts = mux->last_dts;
+  }
+
   GST_WRITE_UINT24_BE (data + 4, dts);
+  mux->last_dts = dts;
+
   data[7] = (((guint) dts) >> 24) & 0xff;
 
   data[8] = data[9] = data[10] = 0;
