@@ -168,6 +168,9 @@ create_buffer (guint8 * data, gsize size,
   return buf;
 }
 
+#define AUDIO 0x08
+#define VIDEO 0x09
+
 guint8 speex_hdr0[] = {
   0x53, 0x70, 0x65, 0x65, 0x78, 0x20, 0x20, 0x20,
   0x31, 0x2e, 0x32, 0x72, 0x63, 0x31, 0x00, 0x00,
@@ -372,8 +375,6 @@ check_buf_type_timestamp (GstBuffer * buf, gint packet_type, gint timestamp)
 
 GST_START_TEST (test_increasing_timestamp_when_pts_none)
 {
-  const gint AUDIO = 0x08;
-  const gint VIDEO = 0x09;
   gint timestamp = 3;
   GstClockTime base_time = 42 * GST_SECOND;
   GstPad *audio_sink, *video_sink, *audio_src, *video_src;
@@ -481,6 +482,7 @@ GST_START_TEST (test_video_caps_late)
   DemuxHarnesses harnesses = { a_sink, v_sink };
   guint i;
   GstTestClock *tclock;
+  GstBuffer *buf;
 
   g_object_set (mux->element, "streamable", TRUE,
       "latency", G_GUINT64_CONSTANT (1), NULL);
@@ -493,15 +495,15 @@ GST_START_TEST (test_video_caps_late)
   gst_harness_set_src_caps_str (a_src,
       "audio/x-speex, rate=(int)16000, channels=(int)1");
 
-  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (a_src,
-          gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-              speex_hdr0, sizeof (speex_hdr0), 0, sizeof (speex_hdr0), NULL,
-              NULL)));
+  buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+      speex_buf, sizeof (speex_buf), 0, sizeof (speex_buf), NULL, NULL);
+  GST_BUFFER_PTS (buf) = GST_BUFFER_DTS (buf) = 0 * 20 * GST_MSECOND;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (a_src, buf));
 
-  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (a_src,
-          gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-              speex_hdr1, sizeof (speex_hdr1), 0, sizeof (speex_hdr1), NULL,
-              NULL)));
+  buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+      speex_buf, sizeof (speex_buf), 0, sizeof (speex_buf), NULL, NULL);
+  GST_BUFFER_PTS (buf) = GST_BUFFER_DTS (buf) = 1 * 20 * GST_MSECOND;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (a_src, buf));
 
   /* Wait a little and make sure no clock was scheduled as this shouldn't happen
    * before the caps are set */
@@ -514,21 +516,15 @@ GST_START_TEST (test_video_caps_late)
       "video/x-h264, stream-format=(string)avc, alignment=(string)au, "
       "codec_data=(buffer)0142c00cffe1000b6742c00c95a7201e1108d401000468ce3c80");
 
-  gst_harness_crank_single_clock_wait (mux);
+  buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+      h264_buf, sizeof (h264_buf), 0, sizeof (h264_buf), NULL, NULL);
+  GST_BUFFER_PTS (buf) = GST_BUFFER_DTS (buf) = 0 * (GST_SECOND / 30);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (v_src, buf));
 
-  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (a_src,
-          gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-              speex_buf, sizeof (speex_buf), 0, sizeof (speex_buf), NULL,
-              NULL)));
-
-  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (v_src,
-          gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
-              h264_buf, sizeof (h264_buf), 0, sizeof (h264_buf), NULL, NULL)));
-
-  gst_harness_crank_single_clock_wait (mux);
-  gst_harness_crank_single_clock_wait (mux);
-  gst_harness_crank_single_clock_wait (mux);
-
+  buf = gst_buffer_new_wrapped_full (GST_MEMORY_FLAG_READONLY,
+      h264_buf, sizeof (h264_buf), 0, sizeof (h264_buf), NULL, NULL);
+  GST_BUFFER_PTS (buf) = GST_BUFFER_DTS (buf) = 1 * (GST_SECOND / 30);
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (v_src, buf));
 
   /* push from flvmux to demux */
   for (i = 0; i < 6; i++)
@@ -542,12 +538,110 @@ GST_START_TEST (test_video_caps_late)
   fail_unless (gst_test_clock_get_next_entry_time (tclock) ==
       GST_CLOCK_TIME_NONE);
 
-  g_clear_object (&tclock);
+  gst_object_unref (tclock);
+
+  gst_element_set_state (mux->element, GST_STATE_NULL);
+  gst_harness_teardown (mux);
   gst_harness_teardown (a_src);
   gst_harness_teardown (v_src);
-  gst_harness_teardown (mux);
   gst_harness_teardown (a_sink);
   gst_harness_teardown (v_sink);
+}
+
+GST_END_TEST;
+
+typedef struct
+{
+  guint media_type;
+  gint ts;                      /* timestamp in ms */
+  gint rt;                      /* running_time in ms */
+} InputData;
+
+GST_START_TEST (test_incrementing_timestamps)
+{
+  GstPad *audio_sink, *video_sink, *audio_src, *video_src;
+  GstHarness *h, *audio, *video, *audio_q, *video_q;
+  GstTestClock *tclock;
+  guint i;
+  guint32 prev_pts;
+  InputData input[] = {
+    {AUDIO, 155, 175},
+    {VIDEO, 156, 191},
+    {VIDEO, 190, 191},
+    {AUDIO, 176, 195},
+    {AUDIO, 197, 215},
+  };
+
+  /* setup flvmuxer with queues in front */
+  h = gst_harness_new_with_padnames ("flvmux", NULL, "src");
+  audio = gst_harness_new_with_element (h->element, "audio", NULL);
+  video = gst_harness_new_with_element (h->element, "video", NULL);
+  audio_q = gst_harness_new ("queue");
+  video_q = gst_harness_new ("queue");
+  audio_sink = GST_PAD_PEER (audio->srcpad);
+  video_sink = GST_PAD_PEER (video->srcpad);
+  audio_src = GST_PAD_PEER (audio_q->sinkpad);
+  video_src = GST_PAD_PEER (video_q->sinkpad);
+  gst_pad_unlink (audio->srcpad, audio_sink);
+  gst_pad_unlink (video->srcpad, video_sink);
+  gst_pad_unlink (audio_src, audio_q->sinkpad);
+  gst_pad_unlink (video_src, video_q->sinkpad);
+  gst_pad_link (audio_src, audio_sink);
+  gst_pad_link (video_src, video_sink);
+  g_object_set (h->element, "streamable", TRUE, NULL);
+
+  gst_harness_set_src_caps_str (audio_q,
+      "audio/mpeg, mpegversion=(int)4, "
+      "rate=(int)44100, channels=(int)1, "
+      "stream-format=(string)raw, codec_data=(buffer)1208");
+
+  gst_harness_set_src_caps_str (video_q,
+      "video/x-h264, stream-format=(string)avc, alignment=(string)au, "
+      "codec_data=(buffer)0142c00dffe1000d6742c00d95a0507c807844235001000468ce3c80");
+
+  tclock = gst_harness_get_testclock (h);
+
+  for (i = 0; i < G_N_ELEMENTS (input); i++) {
+    InputData *d = &input[i];
+    GstBuffer *buf = gst_buffer_new ();
+    GstClockTime now = d->rt * GST_MSECOND;
+
+    GST_BUFFER_DTS (buf) = GST_BUFFER_PTS (buf) = d->ts * GST_MSECOND;
+    gst_test_clock_set_time (tclock, now);
+
+    if (d->media_type == AUDIO)
+      gst_harness_push (audio_q, buf);
+    else
+      gst_harness_push (video_q, buf);
+  }
+
+  /* pull the flv metadata */
+  gst_buffer_unref (gst_harness_pull (h));
+  gst_buffer_unref (gst_harness_pull (h));
+  gst_buffer_unref (gst_harness_pull (h));
+
+  /* verify pts in the flvheader is increasing */
+  prev_pts = 0;
+  for (i = 0; i < G_N_ELEMENTS (input); i++) {
+    GstBuffer *buf = gst_harness_pull (h);
+    GstMapInfo map;
+    guint32 pts;
+    gst_buffer_map (buf, &map, GST_MAP_READ);
+    pts = GST_READ_UINT24_BE (map.data + 4);
+    g_print ("media=%u, pts = %u\n", map.data[0], pts);
+    fail_unless (pts >= prev_pts);
+    prev_pts = pts;
+    gst_buffer_unmap (buf, &map);
+    gst_buffer_unref (buf);
+  }
+
+  /* teardown */
+  gst_object_unref (tclock);
+  gst_harness_teardown (h);
+  gst_harness_teardown (audio);
+  gst_harness_teardown (video);
+  gst_harness_teardown (audio_q);
+  gst_harness_teardown (video_q);
 }
 
 GST_END_TEST;
@@ -572,6 +666,7 @@ flvmux_suite (void)
   tcase_add_test (tc_chain, test_speex_streamable);
   tcase_add_test (tc_chain, test_increasing_timestamp_when_pts_none);
   tcase_add_test (tc_chain, test_video_caps_late);
+  tcase_add_test (tc_chain, test_incrementing_timestamps);
 
   return s;
 }
