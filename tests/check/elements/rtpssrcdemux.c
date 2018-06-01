@@ -71,6 +71,7 @@ GST_START_TEST (test_rtpssrcdemux_max_streams)
 {
   GstHarness *h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
   GSList *src_h = NULL;
+  gint i;
 
   g_object_set (h->element, "max-streams", 64, NULL);
   gst_harness_set_src_caps_str (h, "application/x-rtp");
@@ -78,7 +79,7 @@ GST_START_TEST (test_rtpssrcdemux_max_streams)
       "new-ssrc-pad", (GCallback) new_ssrc_pad_found, &src_h);
   gst_harness_play (h);
 
-  for (int i = 0; i < 128; ++i) {
+  for (i = 0; i < 128; ++i) {
     fail_unless_equals_int (GST_FLOW_OK,
         gst_harness_push (h, generate_test_buffer (0, i)));
   }
