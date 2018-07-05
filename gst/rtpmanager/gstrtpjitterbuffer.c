@@ -4853,6 +4853,7 @@ gst_rtp_jitter_buffer_create_stats (GstRtpJitterBuffer * jbuf)
       "total-avg-jitter", G_TYPE_UINT64, priv->total_avg_jitter,
       "min-jitter", G_TYPE_UINT64, priv->min_jitter,
       "max-jitter", G_TYPE_UINT64, priv->max_jitter,
+      "latency-ms", G_TYPE_UINT, priv->latency_ms,
       "rtx-count", G_TYPE_UINT64, priv->num_rtx_requests,
       "rtx-success-count", G_TYPE_UINT64, priv->num_rtx_success,
       "rtx-per-packet", G_TYPE_DOUBLE, priv->avg_rtx_num,
