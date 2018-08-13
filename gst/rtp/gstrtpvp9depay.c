@@ -253,6 +253,19 @@ gst_rtp_vp9_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
 
   /* Check L optional header layer indices */
   if (l_bit) {
+    guint d_bit;
+
+    spatial_layer = (data[hdrsize] >> 3) & 0x07;
+    d_bit = (data[hdrsize] >> 0) & 0x01;
+    GST_TRACE_OBJECT (self, "TID=%d, U=%d, SID=%d, D=%d",
+        (data[hdrsize] >> 5) & 0x07, (data[hdrsize] >> 4) & 0x01,
+        (data[hdrsize] >> 3) & 0x07, (data[hdrsize] >> 0) & 0x01);
+
+    if (spatial_layer == 0 && d_bit != 0) {
+      GST_DEBUG_OBJECT (self, "Invalid inter-layer dependency for base layer");
+      goto invalid_header;
+    }
+
     hdrsize++;
     /* Check TL0PICIDX temporal layer zero index (non-flexible mode) */
     if (!f_bit)
@@ -368,8 +381,11 @@ gst_rtp_vp9_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
   gst_adapter_push (self->adapter, payload);
   self->last_picture_id = picture_id;
 
-  /* Marker indicates that it was the last rtp packet for this frame */
-  if (gst_rtp_buffer_get_marker (rtp)) {
+  /* Marker indicates that it was the last rtp packet for this picture. Note
+   * that if spatial scalability is used, e_bit will be set for the last
+   * packet of a frame while the marker bit is not set until the last packet
+   * of the picture. */
+  if (gst_rtp_buffer_get_marker (rtp) || e_bit) {
     GstBuffer *out;
     gboolean key_frame_first_layer = !p_bit && spatial_layer == 0;
 
@@ -442,7 +458,11 @@ too_small:
   GST_LOG_OBJECT (self, "Invalid rtp packet (too small), ignoring");
   gst_adapter_clear (self->adapter);
   self->started = FALSE;
+  goto done;
 
+invalid_header:
+  gst_adapter_clear (self->adapter);
+  self->started = FALSE;
   goto done;
 }
 
