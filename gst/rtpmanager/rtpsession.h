@@ -296,6 +296,11 @@ struct _RTPSession {
   gboolean      is_doing_ptp;
 
   GList         *conflicting_addresses;
+
+  guint32 nack_probe_ssrc;
+  guint nack_probe_pct;
+  GstClockTime nack_probe_duration;
+  GstClockTime nack_probe_deadline;
 };
 
 /**
@@ -310,6 +315,7 @@ struct _RTPSessionClass {
 
   /* action signals */
   RTPSource* (*get_source_by_ssrc) (RTPSession *sess, guint32 ssrc);
+  void (*nack_probe)  (RTPSession *sess, guint ssrc, guint pct, GstClockTime duration);
 
   /* signals */
   void (*on_new_ssrc)       (RTPSession *sess, RTPSource *source);
