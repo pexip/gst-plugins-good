@@ -2229,7 +2229,7 @@ rtp_session_process_nack_probe (RTPSession * sess, RTPSource * source,
     if (current_time <= sess->nack_probe_deadline) {
       guint pct = (guint) (g_random_double () * 100.0);
       if ((pct + sess->nack_probe_pct) > 100) {
-        GST_WARNING ("Register nack for ssrc: %u #%u", source->ssrc, seqnum);
+        GST_DEBUG ("Register nack for ssrc: %u #%u", source->ssrc, seqnum);
         rtp_source_register_nack (source, seqnum);
       }
     } else {
