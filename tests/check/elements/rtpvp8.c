@@ -741,7 +741,7 @@ GST_START_TEST (test_pay_with_meta)
 }
 GST_END_TEST;
 
-GST_START_TEST (test_pay_contiuous_picture_id_and_tl0picidx)
+GST_START_TEST (test_pay_continuous_picture_id_and_tl0picidx)
 {
   guint8 vp8_bitstream_payload[] = {
       0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00, 0x90, 0x00, 0x06, 0x47,
@@ -833,6 +833,89 @@ GST_START_TEST (test_pay_contiuous_picture_id_and_tl0picidx)
 }
 GST_END_TEST;
 
+GST_START_TEST (test_pay_tl0picidx_split_buffer)
+{
+  guint8 vp8_bitstream_payload[] = {
+      0x30, 0x00, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00, 0x90, 0x00, 0x06, 0x47,
+      0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21, 0x00
+  };
+  GstHarness *h = gst_harness_new_parse ("rtpvp8pay mtu=28 picture-id-mode=1 picture-id-offset=0");
+  const gint header_len = 12 + 5; /* RTP + VP8 payload header */
+  const gint picid_offset = 14;
+  const gint tl0picidx_offset = 15;
+  guint output_bytes_left;
+  GstBuffer *buffer;
+  GstMapInfo map;
+
+  gst_harness_set_src_caps_str (h, "video/x-vp8");
+
+  /* Push a frame for temporal layer 0 with meta */
+  buffer = gst_buffer_new_from_array (vp8_bitstream_payload);
+  gst_buffer_add_video_vp8_meta_full (buffer, TRUE, TRUE, 0, 0);
+  gst_harness_push (h, buffer);
+
+  /* Expect it to be split into multiple buffers to fit the MTU */
+  output_bytes_left = sizeof(vp8_bitstream_payload);
+  while (output_bytes_left > 0) {
+    const gint expected = MIN(output_bytes_left, 28 - header_len);
+    const gint packet_len = header_len + expected;
+    output_bytes_left -= expected;
+
+    buffer = gst_harness_pull (h);
+    fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
+    fail_unless_equals_int (map.size, packet_len);
+    fail_unless_equals_int (map.data[picid_offset], 0x00);
+    fail_unless_equals_int (map.data[tl0picidx_offset], 0x00);
+    gst_buffer_unmap (buffer, &map);
+    gst_buffer_unref (buffer);
+  }
+
+  /* Push a frame for temporal layer 1 with meta */
+  buffer = gst_buffer_new_from_array (vp8_bitstream_payload);
+  gst_buffer_add_video_vp8_meta_full (buffer, TRUE, TRUE, 1, 0);
+  gst_harness_push (h, buffer);
+
+  /* Expect it to be split into multiple buffers to fit the MTU */
+  output_bytes_left = sizeof(vp8_bitstream_payload);
+  while (output_bytes_left > 0) {
+    const gint expected = MIN(output_bytes_left, 28 - header_len);
+    const gint packet_len = header_len + expected;
+    output_bytes_left -= expected;
+
+    buffer = gst_harness_pull (h);
+    fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
+    fail_unless_equals_int (map.size, packet_len);
+    fail_unless_equals_int (map.data[picid_offset], 0x01);
+    fail_unless_equals_int (map.data[tl0picidx_offset], 0x00);
+    gst_buffer_unmap (buffer, &map);
+    gst_buffer_unref (buffer);
+  }
+
+  /* Push another frame for temporal layer 0 with meta */
+  buffer = gst_buffer_new_from_array (vp8_bitstream_payload);
+  gst_buffer_add_video_vp8_meta_full (buffer, TRUE, TRUE, 0, 0);
+  gst_harness_push (h, buffer);
+
+  /* Expect it to be split into multiple buffers to fit the MTU */
+  output_bytes_left = sizeof(vp8_bitstream_payload);
+  while (output_bytes_left > 0) {
+    const gint expected = MIN(output_bytes_left, 28 - header_len);
+    const gint packet_len = header_len + expected;
+    output_bytes_left -= expected;
+
+    buffer = gst_harness_pull (h);
+    fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
+    fail_unless_equals_int (map.size, packet_len);
+    fail_unless_equals_int (map.data[picid_offset], 0x02);
+    fail_unless_equals_int (map.data[tl0picidx_offset], 0x01);
+    gst_buffer_unmap (buffer, &map);
+    gst_buffer_unref (buffer);
+  }
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 rtpvp8_suite (void)
 {
@@ -853,7 +936,8 @@ rtpvp8_suite (void)
   suite_add_tcase (s, (tc_chain = tcase_create ("vp8pay")));
   tcase_add_loop_test (tc_chain, test_pay_no_meta, 0 , G_N_ELEMENTS(no_meta_test_data));
   tcase_add_loop_test (tc_chain, test_pay_with_meta, 0 , G_N_ELEMENTS(with_meta_test_data));
-  tcase_add_test (tc_chain, test_pay_contiuous_picture_id_and_tl0picidx);
+  tcase_add_test (tc_chain, test_pay_continuous_picture_id_and_tl0picidx);
+  tcase_add_test (tc_chain, test_pay_tl0picidx_split_buffer);
 
   return s;
 }
