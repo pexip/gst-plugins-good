@@ -523,7 +523,7 @@ gst_rtp_vp8_create_header_buffer (GstRtpVP8Pay * self, guint8 partid,
       /* FIXME: Support a predicition structure where higher layers don't
        * necessarily refer to the last base layer frame, ie they use an older
        * tl0picidx as signalled in the meta */
-      if (temporal_layer == 0)
+      if (temporal_layer == 0 && start)
         self->tl0picidx++;
       p[index] = self->tl0picidx & 0xFF;
       p[index+1] = ((temporal_layer << 6) | (layer_sync << 5)) & 0xFF;
@@ -586,12 +586,6 @@ gst_rtp_vp8_payload_next (GstRtpVP8Pay * self, GstBufferList * list,
      */
     partition = 0;
     start = (offset == 0);
-
-    /* For interop it's most likely better to keep the temporal scalability
-     * fields present if the stream previously had them present. Alternating
-     * whether these fields are present or not may confuse the receiver. */
-    if (meta->use_temporal_scaling)
-      self->temporal_scalability_fields_present = TRUE;
   } else {
     partition = gst_rtp_vp8_offset_to_partition (self, offset);
     g_assert (partition < self->n_partitions);
@@ -633,6 +627,12 @@ gst_rtp_vp8_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
         ("Failed to parse VP8 frame"));
     return GST_FLOW_ERROR;
   }
+
+  /* For interop it's most likely better to keep the temporal scalability
+   * fields present if the stream previously had them present. Alternating
+   * whether these fields are present or not may confuse the receiver. */
+  if (meta && meta->use_temporal_scaling)
+    self->temporal_scalability_fields_present = TRUE;
 
   mtu = GST_RTP_BASE_PAYLOAD_MTU (payload);
   vp8_hdr_len = gst_rtp_vp8_calc_header_len (self);
