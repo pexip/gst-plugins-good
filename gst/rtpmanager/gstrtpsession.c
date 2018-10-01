@@ -193,6 +193,9 @@ GST_STATIC_PAD_TEMPLATE ("send_rtcp_src",
     GST_STATIC_CAPS ("application/x-rtcp")
     );
 
+static GQuark quark_rtx_count;
+static GQuark quark_key_unit_requests_count;
+
 /* signals and args */
 enum
 {
@@ -486,6 +489,10 @@ gst_rtp_session_class_init (GstRtpSessionClass * klass)
 {
   GObjectClass *gobject_class;
   GstElementClass *gstelement_class;
+
+  quark_rtx_count = g_quark_from_static_string ("rtx-count");
+  quark_key_unit_requests_count =
+      g_quark_from_static_string ("key-unit-requests-count");
 
   gobject_class = (GObjectClass *) klass;
   gstelement_class = (GstElementClass *) klass;
@@ -1025,10 +1032,10 @@ gst_rtp_session_create_stats (GstRtpSession * rtpsession)
   GstStructure *s;
 
   g_object_get (rtpsession->priv->session, "stats", &s, NULL);
-  gst_structure_set (s,
-      "rtx-count", G_TYPE_UINT, rtpsession->priv->rtx_count,
-      "key-unit-requests-count", G_TYPE_UINT, rtpsession->priv->key_unit_requests_count,
-      NULL);
+  gst_structure_id_set (s,
+      quark_rtx_count, G_TYPE_UINT, rtpsession->priv->rtx_count,
+      quark_key_unit_requests_count, G_TYPE_UINT,
+      rtpsession->priv->key_unit_requests_count, NULL);
 
   return s;
 }
