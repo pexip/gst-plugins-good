@@ -2252,8 +2252,8 @@ gst_vpx_enc_transform_meta (GstVideoEncoder * encoder,
    tags = gst_meta_api_type_get_tags (info->api);
 
     if (!tags || (g_strv_length ((gchar **) tags) == 1
-        && gst_meta_api_type_has_tag (info->api,
-            g_quark_from_string (GST_META_TAG_VIDEO_STR))))
+            && gst_meta_api_type_has_tag (info->api,
+                gst_meta_tag_video_quark ())))
       return TRUE;
   }
 
