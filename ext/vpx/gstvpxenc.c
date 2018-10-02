@@ -325,6 +325,10 @@ gst_vpx_enc_er_flags_get_type (void)
   return id;
 }
 
+/* cached quark to avoid contention on the global quark table lock */
+#define META_TAG_VIDEO meta_tag_video_quark
+static GQuark meta_tag_video_quark;
+
 static void gst_vpx_enc_finalize (GObject * object);
 static void gst_vpx_enc_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
@@ -736,6 +740,8 @@ gst_vpx_enc_class_init (GstVPXEncClass * klass)
           0.0, G_MAXFLOAT, DEFAULT_BITS_PER_PIXEL,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_DOC_SHOW_DEFAULT)));
+
+  meta_tag_video_quark = g_quark_from_static_string (GST_META_TAG_VIDEO_STR);
 
   GST_DEBUG_CATEGORY_INIT (gst_vpxenc_debug, "vpxenc", 0, "VPX Encoder");
 
@@ -2340,8 +2346,7 @@ gst_vpx_enc_transform_meta (GstVideoEncoder * encoder,
    tags = gst_meta_api_type_get_tags (info->api);
 
     if (!tags || (g_strv_length ((gchar **) tags) == 1
-        && gst_meta_api_type_has_tag (info->api,
-            g_quark_from_string (GST_META_TAG_VIDEO_STR))))
+            && gst_meta_api_type_has_tag (info->api, META_TAG_VIDEO)))
       return TRUE;
   }
 
