@@ -39,6 +39,8 @@ G_BEGIN_DECLS
 #define GST_RTP_VP9_DEPAY_GET_CLASS(obj) \
   (G_TYPE_INSTANCE_GET_CLASS ((obj), GST_TYPE_RTP_VP9_DEPAY, \
     GstRtpVP9DepayClass))
+#define GST_RTP_VP9_DEPAY_CAST(obj) ((GstRtpVP9Depay *)(obj))
+
 typedef struct _GstRtpVP9Depay GstRtpVP9Depay;
 typedef struct _GstRtpVP9DepayClass GstRtpVP9DepayClass;
 
@@ -59,8 +61,12 @@ struct _GstRtpVP9Depay
   gint last_height;
   guint last_picture_id;
   GstEvent *last_lost_event;
+  gboolean last_pushed_was_lost_event;
   gboolean caps_sent;
   gboolean stop_lost_events;
+
+  /* properties */
+  gboolean hide_picture_id_gap;
 };
 
 GType gst_rtp_vp9_depay_get_type (void);
