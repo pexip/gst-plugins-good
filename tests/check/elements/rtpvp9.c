@@ -228,7 +228,6 @@ typedef struct
   gboolean marker_bit;
 } DepayGapEventTestDataFull;
 
-
 static void
 test_depay_gap_event_base (const DepayGapEventTestData *data,
     gboolean send_lost_event, gboolean expect_gap_event, int iter)
@@ -537,6 +536,85 @@ GST_START_TEST (test_depay_no_gap_event_when_partial_frames_with_no_picid_gap)
 GST_END_TEST;
 
 
+/* PictureID emum is not exported */
+enum PictureID {
+  VP8_PAY_NO_PICTURE_ID = 0,
+  VP8_PAY_PICTURE_ID_7BITS = 1,
+  VP8_PAY_PICTURE_ID_15BITS = 2,
+};
+
+static const struct no_meta_test_data {
+  /* control inputs */
+  enum PictureID pid; /* picture ID type of test */
+
+  /* expected outputs */
+  guint vp9_payload_header_size;
+  guint vp9_payload_control_value;
+} no_meta_test_data[] = {
+  { VP8_PAY_NO_PICTURE_ID,     1, 0x0e}, /* no picture ID single byte header, B&E set. We expect SS (v) to be set */
+  { VP8_PAY_PICTURE_ID_7BITS,  2, 0x8e }, /* I bit set for Pid_ID, B&E set. We expect SS (v) to be set, since framework sets it.  */
+  { VP8_PAY_PICTURE_ID_15BITS, 3, 0x8e }, /* I bit set for Pid_ID, B&E set. We expect SS (v) to be set, since framework sets it. */
+
+};
+
+GST_START_TEST (test_pay_no_meta)
+{
+
+  guint8 vp9_bitstream_payload[] = {
+    0x82, 0x49, 0x83, 0x42, 0x00, 0x03, 0xf0, 0x03, 0xf6, 0x08, 0x38, 0x24,
+    0x1c, 0x18, 0x54, 0x00, 0x00, 0x20, 0x40, 0x00, 0x13, 0xbf, 0xff, 0xf8,
+    0x65, 0xdc, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f,
+    0xff, 0xff, 0xff, 0xf8, 0x65, 0xdc, 0x3a, 0xff, 0xff, 0xff, 0xf0, 0xcb,
+    0xb8, 0x00, 0x00
+  };
+  const struct no_meta_test_data *test_data = &no_meta_test_data[__i__];
+  GstBuffer *buffer;
+  GstMapInfo map = GST_MAP_INFO_INIT;
+  GstHarness *h = gst_harness_new ("rtpvp9pay");
+  gst_harness_set_src_caps_str (h, "video/x-vp9");
+
+  /* check unknown picture id enum value */
+  fail_unless (test_data->pid <= VP8_PAY_PICTURE_ID_15BITS);
+
+  g_object_set (h->element, "picture-id-mode", test_data->pid,
+      "picture-id-offset", 0x5A5A, NULL);
+
+  buffer = gst_buffer_new_wrapped (g_memdup (vp9_bitstream_payload,
+          sizeof (vp9_bitstream_payload)), sizeof (vp9_bitstream_payload));
+
+  buffer = gst_harness_push_and_pull (h, buffer);
+
+  fail_unless (gst_buffer_map (buffer, &map, GST_MAP_READ));
+  fail_unless (map.data != NULL);
+
+  /* check buffer size and content */
+  /* The VP9 rtp buffer generator autmatically adds Scalability structure information
+   * in  gst_rtp_vp9_create_header_buffer, if frame is keyframe and start bit is set, so adjust for that (8 bytes).
+   */
+  fail_unless_equals_int (map.size,
+      12 + test_data->vp9_payload_header_size + 8 + sizeof (vp9_bitstream_payload));
+
+  fail_unless_equals_int (test_data->vp9_payload_control_value, map.data[12]);
+
+  if (test_data->vp9_payload_header_size > 1) {
+    /* vp9 header extension byte must have I set */
+    fail_unless_equals_int (0x80, map.data[12] & 0x80);
+    /* check picture id */
+    if (test_data->pid == VP8_PAY_PICTURE_ID_7BITS)  {
+      fail_unless_equals_int (0x5a, map.data[13]);
+    } else if (test_data->pid == VP8_PAY_PICTURE_ID_15BITS) {
+      fail_unless_equals_int (0xDA, map.data[13]);
+      fail_unless_equals_int (0x5A, map.data[14]);
+    }
+  }
+
+  gst_buffer_unmap (buffer, &map);
+  gst_buffer_unref (buffer);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 
 static Suite *
 rtpvp9_suite (void)
@@ -556,6 +634,11 @@ rtpvp9_suite (void)
   tcase_add_loop_test (tc_chain, test_depay_send_gap_event_when_marker_bit_missing_and_picid_gap, 0, 2);
   tcase_add_test (tc_chain, test_depay_send_gap_event_when_marker_bit_missing_and_no_picid_gap);
   tcase_add_test (tc_chain, test_depay_no_gap_event_when_partial_frames_with_no_picid_gap);
+  /*TODO: add tests for scalability options */
+
+  suite_add_tcase (s, (tc_chain = tcase_create ("vp9pay")));
+  tcase_add_loop_test (tc_chain, test_pay_no_meta, 0 , G_N_ELEMENTS(no_meta_test_data));
+  /*TODO: add tests for scalability options */
 
   return s;
 }
