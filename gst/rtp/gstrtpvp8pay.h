@@ -45,6 +45,7 @@ enum _PictureIDMode {
   VP8_PAY_NO_PICTURE_ID,
   VP8_PAY_PICTURE_ID_7BITS,
   VP8_PAY_PICTURE_ID_15BITS,
+  __PictureIDMode_MAX
 };
 
 struct _GstRtpVP8PayClass

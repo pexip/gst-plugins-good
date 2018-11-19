@@ -95,41 +95,27 @@ GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-vp8"));
 
-static gint
-picture_id_field_len (PictureIDMode mode)
-{
-  if (VP8_PAY_NO_PICTURE_ID == mode)
-    return 0;
-  if (VP8_PAY_PICTURE_ID_7BITS == mode)
-    return 7;
-  return 15;
-}
+static const short picture_id_field_len[__PictureIDMode_MAX] = {0, 7, 15};
 
 static void
 gst_rtp_vp8_pay_picture_id_reset (GstRtpVP8Pay * obj)
 {
-  gint nbits;
-
   if (obj->picture_id_offset == -1)
     obj->picture_id = g_random_int ();
   else
     obj->picture_id = obj->picture_id_offset;
 
-  nbits = picture_id_field_len (obj->picture_id_mode);
-  obj->picture_id &= (1 << nbits) - 1;
+  obj->picture_id &= (1 << picture_id_field_len[obj->picture_id_mode]) - 1;
 }
 
 static void
 gst_rtp_vp8_pay_picture_id_increment (GstRtpVP8Pay * obj)
 {
-  gint nbits;
-
   if (obj->picture_id_mode == VP8_PAY_NO_PICTURE_ID)
     return;
 
-  nbits = picture_id_field_len (obj->picture_id_mode);
   obj->picture_id++;
-  obj->picture_id &= (1 << nbits) - 1;
+  obj->picture_id &= (1 << picture_id_field_len[obj->picture_id_mode]) - 1;
 }
 
 static void

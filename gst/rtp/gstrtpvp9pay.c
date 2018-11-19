@@ -40,11 +40,13 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_vp9_pay_debug);
 #define GST_CAT_DEFAULT gst_rtp_vp9_pay_debug
 
 #define DEFAULT_PICTURE_ID_MODE VP9_PAY_NO_PICTURE_ID
+#define DEFAULT_PICTURE_ID_OFFSET (-1)
 
 enum
 {
   PROP_0,
-  PROP_PICTURE_ID_MODE
+  PROP_PICTURE_ID_MODE,
+  PROP_PICTURE_ID_OFFSET
 };
 
 #define GST_TYPE_RTP_VP9_PAY_PICTURE_ID_MODE (gst_rtp_vp9_pay_picture_id_mode_get_type())
@@ -93,6 +95,20 @@ GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-vp9"));
 
+static const short picture_id_field_len[__VP9PictureIDMode_MAX] = {0, 7, 15};
+
+static void
+gst_rtp_vp9_pay_picture_id_reset (GstRtpVP9Pay * obj)
+{
+  if (obj->picture_id_offset == -1)
+    obj->picture_id = g_random_int ();
+  else
+    obj->picture_id = obj->picture_id_offset;
+
+  obj->picture_id &= (1 << picture_id_field_len[obj->picture_id_mode]) - 1;
+}
+
+
 static void
 gst_rtp_vp9_pay_init (GstRtpVP9Pay * obj)
 {
@@ -118,6 +134,11 @@ gst_rtp_vp9_pay_class_init (GstRtpVP9PayClass * gst_rtp_vp9_pay_class)
       g_param_spec_enum ("picture-id-mode", "Picture ID Mode",
           "The picture ID mode for payloading",
           GST_TYPE_RTP_VP9_PAY_PICTURE_ID_MODE, DEFAULT_PICTURE_ID_MODE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_PICTURE_ID_OFFSET,
+      g_param_spec_int ("picture-id-offset", "Picture ID offset",
+          "Offset to add to the initial picture-id (-1 = random)",
+          -1, 0x7FFF, DEFAULT_PICTURE_ID_OFFSET,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_add_static_pad_template (element_class,
@@ -153,6 +174,10 @@ gst_rtp_vp9_pay_set_property (GObject * object,
       else if (rtpvp9pay->picture_id_mode == VP9_PAY_PICTURE_ID_15BITS)
         rtpvp9pay->picture_id = g_random_int_range (0, G_MAXUINT16) & 0x7FFF;
       break;
+    case PROP_PICTURE_ID_OFFSET:
+      rtpvp9pay->picture_id_offset = g_value_get_int (value);
+      gst_rtp_vp9_pay_picture_id_reset (rtpvp9pay);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -168,6 +193,9 @@ gst_rtp_vp9_pay_get_property (GObject * object,
   switch (prop_id) {
     case PROP_PICTURE_ID_MODE:
       g_value_set_enum (value, rtpvp9pay->picture_id_mode);
+      break;
+    case PROP_PICTURE_ID_OFFSET:
+      g_value_set_int (value, rtpvp9pay->picture_id_offset);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -192,6 +220,42 @@ gst_rtp_vp9_pay_parse_frame (GstRtpVP9Pay * self, GstBuffer * buffer,
   gsize size;
   gboolean keyframe;
   guint32 tmp, profile;
+
+  /*
+   * Trying to understand VP9 payload header:
+   *
+   * ALT1 (P>2 && S==1)
+   * ID : bits : Description
+   * ********************************************
+   * FM : 2b   : Frame Marker == VP9_FRAME_MARKER
+   * P  : 2-3b : Profile (VAL<=2:2bit, VAL>2:3bit)
+   * S  : 1b   : Show Existing Frame
+   * FB : 3b   : Frame Buffer id
+   *
+   * ALT 2 (FT == 1 --> Non Keyframe)
+   * ID : bits : Description
+   * ********************************************
+   * FM : 2b   : Frame Marker == VP9_FRAME_MARKER
+   * P  : 2-3b : Profile (VAL<=2:2bit, VAL>2:3bit)
+   * S  : 1b   : Show Existing Frame
+   * FT : 1b   : Frame Type (0:key frame)
+   * SF : 1b   : Show frame
+   * ER : 1b   : Error Resilient
+   *
+   *
+   * ALT 3 (FT == 0 --> Keyframe)
+   * ID : bits : Description
+   * ********************************************
+   * FM : 2b   : Frame Marker == VP9_FRAME_MARKER
+   * P  : 2-3b : Profile (VAL<=2:2bit, VAL>2:3bit)
+   * S  : 1b   : Show Existing Frame
+   * FT : 1b   : Frame Type (0:key frame)
+   * SF : 1b   : Show frame
+   * ER : 1b   : Error Resilient
+   * SC : 24b  : Sync Code
+   *
+   *
+  */
 
   if (G_UNLIKELY (buffer_size < 3))
     goto error;
@@ -466,6 +530,15 @@ gst_rtp_vp9_payload_next (GstRtpVP9Pay * self, GstBufferList * list,
   return available;
 }
 
+static void
+gst_rtp_vp9_pay_picture_id_increment (GstRtpVP9Pay * obj)
+{
+  if (obj->picture_id_mode == VP9_PAY_NO_PICTURE_ID)
+    return;
+
+  obj->picture_id++;
+  obj->picture_id &= (1 << picture_id_field_len[obj->picture_id_mode]) - 1;
+}
 
 static GstFlowReturn
 gst_rtp_vp9_pay_handle_buffer (GstRTPBasePayload * payload, GstBuffer * buffer)
@@ -520,6 +593,11 @@ gst_rtp_vp9_pay_sink_event (GstRTPBasePayload * payload, GstEvent * event)
       self->picture_id = g_random_int_range (0, G_MAXUINT8) & 0x7F;
     else if (self->picture_id_mode == VP9_PAY_PICTURE_ID_15BITS)
       self->picture_id = g_random_int_range (0, G_MAXUINT16) & 0x7FFF;
+  } else if (GST_EVENT_TYPE (event) == GST_EVENT_GAP) {
+    guint picture_id = self->picture_id;
+    gst_rtp_vp9_pay_picture_id_increment (self);
+    GST_DEBUG_OBJECT (payload, "Incrementing picture ID on GAP event %u->%u",
+        picture_id, self->picture_id);
   }
 
   return GST_RTP_BASE_PAYLOAD_CLASS (gst_rtp_vp9_pay_parent_class)->sink_event
