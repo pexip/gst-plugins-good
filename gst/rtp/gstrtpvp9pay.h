@@ -46,6 +46,7 @@ enum _VP9PictureIDMode {
   VP9_PAY_NO_PICTURE_ID,
   VP9_PAY_PICTURE_ID_7BITS,
   VP9_PAY_PICTURE_ID_15BITS,
+  __VP9PictureIDMode_MAX
 };
 
 struct _GstRtpVP9PayClass
@@ -60,6 +61,7 @@ struct _GstRtpVP9Pay
   guint width;
   guint height;
   VP9PictureIDMode picture_id_mode;
+  gint picture_id_offset;
   guint16 picture_id;
 };
 
