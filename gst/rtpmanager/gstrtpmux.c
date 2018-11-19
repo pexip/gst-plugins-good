@@ -450,6 +450,7 @@ gst_rtp_mux_chain_list (GstPad * pad, GstObject * parent,
       else
         ret = GST_FLOW_NOT_NEGOTIATED;
       gst_buffer_list_unref (bufferlist);
+      gst_caps_unref (current_caps);
       goto out;
     }
     gst_caps_unref (current_caps);
@@ -538,6 +539,7 @@ gst_rtp_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       else
         ret = GST_FLOW_NOT_NEGOTIATED;
       gst_buffer_unref (buffer);
+      gst_caps_unref (current_caps);
       goto out;
     }
     gst_caps_unref (current_caps);
@@ -633,7 +635,6 @@ gst_rtp_mux_setcaps (GstPad * pad, GstRTPMux * rtp_mux, GstCaps * caps)
     }
 
     gst_caps_unref (othercaps);
-
     gst_caps_unref (peercaps);
     gst_caps_unref (tcaps);
   }
