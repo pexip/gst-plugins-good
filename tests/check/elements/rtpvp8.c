@@ -56,6 +56,7 @@ static guint8 intra_nopicid_seqnum0[] = {
   0x90, 0x00, 0xf0, 0x07, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00,
   0x90, 0x00, 0x06, 0x47, 0x08, 0x85, 0x85, 0x88, 0x99, 0x84, 0x88, 0x21,
 };
+
 static guint8 intra_picid24_seqnum0_tl1_sync_tl0picidx12[] = {
   0x80, 0xe0, 0x00, 0x00, 0x9a, 0xbb, 0xe3, 0xb3, 0x8b, 0xe9, 0x1d, 0x61,
   0x90, 0xe0, 0x18, 0x0c, 0x60, 0xf0, 0x07, 0x00, 0x9d, 0x01, 0x2a, 0xb0, 0x00,
@@ -555,20 +556,19 @@ enum PictureID {
 static const struct no_meta_test_data {
   /* control inputs */
   enum PictureID pid; /* picture ID type of test */
-  gboolean vp8_payload_header_m_flag;
 
   /* expected outputs */
   guint vp8_payload_header_size;
   guint vp8_payload_control_value;
 } no_meta_test_data[] = {
-  { VP8_PAY_NO_PICTURE_ID,     FALSE , 1, 0x10}, /* no picture ID single byte header, S set */
-  { VP8_PAY_PICTURE_ID_7BITS,  FALSE,  3, 0x90 }, /* X bit to allow for I bit means header is three bytes, S and X set */
-  { VP8_PAY_PICTURE_ID_15BITS, TRUE,   4, 0x90 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+  { VP8_PAY_NO_PICTURE_ID,      1, 0x10}, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,   3, 0x90 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS,  4, 0x90 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
 
   /* repeated with non reference frame */
-  { VP8_PAY_NO_PICTURE_ID,     FALSE , 1, 0x30}, /* no picture ID single byte header, S set */
-  { VP8_PAY_PICTURE_ID_7BITS,  FALSE,  3, 0xB0 }, /* X bit to allow for I bit means header is three bytes, S and X set */
-  { VP8_PAY_PICTURE_ID_15BITS, TRUE,   4, 0xB0 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
+  { VP8_PAY_NO_PICTURE_ID,      1, 0x30}, /* no picture ID single byte header, S set */
+  { VP8_PAY_PICTURE_ID_7BITS,   3, 0xB0 }, /* X bit to allow for I bit means header is three bytes, S and X set */
+  { VP8_PAY_PICTURE_ID_15BITS,  4, 0xB0 }, /* X bit to allow for I bit with M bit means header is four bytes, S, X and M set */
 };
 
 GST_START_TEST (test_pay_no_meta)
