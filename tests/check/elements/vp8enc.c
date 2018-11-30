@@ -379,6 +379,35 @@ GST_START_TEST (test_encode_fresh_meta)
 }
 GST_END_TEST;
 
+GST_START_TEST (test_autobitrate_changes_with_caps)
+{
+  gint bitrate = 0;
+  GstHarness *h = gst_harness_new ("vp8enc");
+  gst_harness_set_src_caps (h, gst_caps_new_i420_full (1280, 720, 30, 1, 1, 1));
+
+  /* Default settings for 720p @ 30fps ≈ 1.2Mbps */
+  g_object_get(h->element, "target-bitrate", &bitrate, NULL);
+  fail_unless_equals_int (bitrate, 1199000);
+
+  /* Change bits-per-pixel 0.036 to give us ≈ 1Mbps */
+  g_object_set(h->element, "bits-per-pixel", 0.037, NULL);
+  g_object_get(h->element, "target-bitrate", &bitrate, NULL);
+  fail_unless_equals_int (bitrate, 1022000);
+
+  /* Halving the framerate should halve the auto bitrate */
+  gst_harness_set_src_caps (h, gst_caps_new_i420_full (1280, 720, 15, 1, 1, 1));
+  g_object_get(h->element, "target-bitrate", &bitrate, NULL);
+  fail_unless_equals_int (bitrate, 511000);
+
+  /* Halving the resolution should quater the auto bitrate */
+  gst_harness_set_src_caps (h, gst_caps_new_i420_full (640, 360, 15, 1, 1, 1));
+  g_object_get(h->element, "target-bitrate", &bitrate, NULL);
+  fail_unless_equals_int (bitrate, 127000);
+
+  gst_harness_teardown (h);
+}
+GST_END_TEST;
+
 static Suite *
 vp8enc_suite (void)
 {
@@ -392,6 +421,7 @@ vp8enc_suite (void)
   tcase_add_test (tc_chain, test_encode_simple_when_bitrate_set_to_zero);
   tcase_add_test (tc_chain, test_encode_temporally_scaled);
   tcase_add_test (tc_chain, test_encode_fresh_meta);
+  tcase_add_test (tc_chain, test_autobitrate_changes_with_caps);
 
   return s;
 }
