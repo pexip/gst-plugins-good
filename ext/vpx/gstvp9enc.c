@@ -105,6 +105,8 @@ static void gst_vp9_enc_preflight_buffer (GstVPXEnc * enc,
     GstVideoCodecFrame * frame, GstBuffer * buffer,
     gboolean layer_sync, guint layer_id, guint8 tl0picidx);
 
+#define DEFAULT_BITS_PER_PIXEL (0.0289)
+
 static void
 gst_vp9_enc_class_init (GstVP9EncClass * klass)
 {
@@ -158,6 +160,7 @@ gst_vp9_enc_init (GstVP9Enc * gst_vp9_enc)
   } else {
     gst_vpx_enc->have_default_config = TRUE;
   }
+  gst_vpx_enc->bits_per_pixel = DEFAULT_BITS_PER_PIXEL;
 }
 
 static vpx_codec_iface_t *
