@@ -16,7 +16,7 @@ vpx_features = [
   [ 'vpx/vp8dx.h', 'vpx_codec_vp9_dx_algo', '-DHAVE_VP9_DECODER', 'VP9 decoder' ],
 ]
 
-vpx_dep = dependency('vpx', version : '>=1.5.0', required : get_option('vpx'))
+vpx_dep = dependency('vpx-sse', version : '>=1.5.0', required : get_option('vpx'))
 
 if vpx_dep.found()
   vpx_args = ['-DHAVE_VPX_1_3']
