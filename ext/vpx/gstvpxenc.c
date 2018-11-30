@@ -107,7 +107,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_vpxenc_debug);
 #define DEFAULT_TIMEBASE_N 0
 #define DEFAULT_TIMEBASE_D 1
 
-#define DEFAULT_BITS_PER_PIXEL 3.3334
+#define DEFAULT_BITS_PER_PIXEL 0.0434
 
 enum
 {
@@ -797,8 +797,22 @@ gst_vpx_enc_finalize (GObject * object)
 static void
 gst_vpx_enc_set_auto_bitrate (GstVPXEnc *encoder)
 {
-  encoder->cfg.rc_target_bitrate = encoder->cfg.g_w * encoder->cfg.g_h *
-      encoder->bits_per_pixel / 1000;
+  if (encoder->input_state != NULL && GST_VIDEO_INFO_FPS_D (&encoder->input_state->info) != 0)
+  {
+    guint size = GST_VIDEO_INFO_WIDTH (&encoder->input_state->info) * GST_VIDEO_INFO_HEIGHT (&encoder->input_state->info);
+    guint pixels_per_sec = size * GST_VIDEO_INFO_FPS_N (&encoder->input_state->info) / GST_VIDEO_INFO_FPS_D (&encoder->input_state->info);
+    guint target_bitrate = pixels_per_sec * encoder->bits_per_pixel;
+
+    GST_DEBUG_OBJECT (encoder, "Setting autobitrate for %ux%ux @ %u/%ufps %.4f = %ubps",
+        GST_VIDEO_INFO_WIDTH (&encoder->input_state->info),
+        GST_VIDEO_INFO_HEIGHT (&encoder->input_state->info),
+        GST_VIDEO_INFO_FPS_N (&encoder->input_state->info),
+        GST_VIDEO_INFO_FPS_D (&encoder->input_state->info),
+        encoder->bits_per_pixel,
+        target_bitrate);
+
+    encoder->cfg.rc_target_bitrate = target_bitrate / 1000;
+  }
 }
 
 static void
@@ -1654,10 +1668,6 @@ gst_vpx_enc_set_format (GstVideoEncoder * video_encoder,
   encoder->cfg.g_w = GST_VIDEO_INFO_WIDTH (info);
   encoder->cfg.g_h = GST_VIDEO_INFO_HEIGHT (info);
 
-  /* Scale default bitrate to our size */
-  if (encoder->rc_target_bitrate_auto)
-    gst_vpx_enc_set_auto_bitrate (encoder);
-
   if (encoder->timebase_n != 0 && encoder->timebase_d != 0) {
     GST_DEBUG_OBJECT (video_encoder, "Using timebase configuration");
     encoder->cfg.g_timebase.num = encoder->timebase_n;
@@ -1855,6 +1865,10 @@ gst_vpx_enc_set_format (GstVideoEncoder * video_encoder,
   if (encoder->input_state)
     gst_video_codec_state_unref (encoder->input_state);
   encoder->input_state = gst_video_codec_state_ref (state);
+
+  /* Scale default bitrate to our size */
+  if (encoder->rc_target_bitrate_auto)
+    gst_vpx_enc_set_auto_bitrate (encoder);
 
   /* prepare cached image buffer setup */
   image = &encoder->image;
