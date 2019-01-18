@@ -96,7 +96,6 @@ typedef struct _GstFlvMux {
   guint64 byte_count;
   guint64 duration;
   gint64 first_timestamp;
-  guint32 last_dts;
 } GstFlvMux;
 
 typedef struct _GstFlvMuxClass {

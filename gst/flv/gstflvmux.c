@@ -639,8 +639,6 @@ gst_flv_mux_release_pad (GstElement * element, GstPad * pad)
   GstFlvMux *mux = GST_FLV_MUX (element);
   GstFlvMuxPad *flvpad = GST_FLV_MUX_PAD (pad);
 
-  GST_LOG_OBJECT (pad, "Releasing pad");
-
   gst_pad_set_active (pad, FALSE);
   gst_flv_mux_reset_pad (flvpad);
 
@@ -1116,11 +1114,6 @@ gst_flv_mux_buffer_to_tag_internal (GstFlvMux * mux, GstBuffer * buffer,
   data[1] = ((size - 11 - 4) >> 16) & 0xff;
   data[2] = ((size - 11 - 4) >> 8) & 0xff;
   data[3] = ((size - 11 - 4) >> 0) & 0xff;
-
-  if (dts < mux->last_dts)
-    GST_WARNING_OBJECT (pad, "Got backwards dts! (%u < %u)", dts,
-        mux->last_dts);
-  mux->last_dts = dts;
 
   GST_WRITE_UINT24_BE (data + 4, dts);
   data[7] = (((guint) dts) >> 24) & 0xff;
@@ -1633,7 +1626,6 @@ gst_flv_mux_find_best_pad (GstAggregator * aggregator, GstClockTime * ts)
   GList *l;
   GstBuffer *buffer;
   GstClockTime best_ts = GST_CLOCK_TIME_NONE;
-  GstClockTime buf_ts;
 
   for (l = GST_ELEMENT_CAST (aggregator)->sinkpads; l; l = l->next) {
     apad = GST_AGGREGATOR_PAD (l->data);
@@ -1641,26 +1633,18 @@ gst_flv_mux_find_best_pad (GstAggregator * aggregator, GstClockTime * ts)
     buffer = gst_aggregator_pad_peek_buffer (GST_AGGREGATOR_PAD (pad));
     if (!buffer)
       continue;
-    GST_DEBUG_OBJECT (apad, "Peeking buffer: %" GST_PTR_FORMAT, buffer);
-
-    buf_ts = gst_flv_mux_segment_to_running_time (&apad->segment,
-        GST_BUFFER_DTS_OR_PTS (buffer));
-    GST_DEBUG_OBJECT (apad,
-        "segmented: %" GST_TIME_FORMAT " -> %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (GST_BUFFER_DTS_OR_PTS (buffer)), GST_TIME_ARGS (buf_ts));
-
     if (best_ts == GST_CLOCK_TIME_NONE) {
       best = pad;
-      best_ts = buf_ts;
-    } else if (buf_ts != GST_CLOCK_TIME_NONE) {
-      if (buf_ts < best_ts) {
+      best_ts = gst_flv_mux_segment_to_running_time (&apad->segment,
+          GST_BUFFER_DTS_OR_PTS (buffer));
+    } else if (GST_BUFFER_DTS_OR_PTS (buffer) != GST_CLOCK_TIME_NONE) {
+      gint64 t = gst_flv_mux_segment_to_running_time (&apad->segment,
+          GST_BUFFER_DTS_OR_PTS (buffer));
+      if (t < best_ts) {
         best = pad;
-        best_ts = buf_ts;
+        best_ts = t;
       }
     }
-    GST_DEBUG_OBJECT (aggregator,
-        "Nominating %" GST_TIME_FORMAT ": %" GST_PTR_FORMAT,
-        GST_TIME_ARGS (best_ts), best);
     gst_buffer_unref (buffer);
   }
   GST_DEBUG_OBJECT (aggregator,
@@ -1837,8 +1821,6 @@ gst_flv_mux_get_next_time (GstAggregator * aggregator)
   GstFlvMux *mux = GST_FLV_MUX (aggregator);
   GstAggregatorPad *agg_audio_pad = GST_AGGREGATOR_PAD_CAST (mux->audio_pad);
   GstAggregatorPad *agg_video_pad = GST_AGGREGATOR_PAD_CAST (mux->video_pad);
-  gboolean wait_for_audio;
-  gboolean wait_for_video;
 
   GST_OBJECT_LOCK (aggregator);
   if (mux->state == GST_FLV_MUX_STATE_HEADER &&
@@ -1846,12 +1828,8 @@ gst_flv_mux_get_next_time (GstAggregator * aggregator)
           (mux->video_pad && mux->video_pad->codec == G_MAXUINT)))
     goto wait_for_data;
 
-  wait_for_audio = agg_audio_pad
-      && !gst_aggregator_pad_has_buffer (agg_audio_pad);
-  wait_for_video = agg_video_pad
-      && !gst_aggregator_pad_has_buffer (agg_video_pad);
-
-  if (wait_for_audio || wait_for_video)
+  if (!((agg_audio_pad && gst_aggregator_pad_has_buffer (agg_audio_pad)) ||
+          (agg_video_pad && gst_aggregator_pad_has_buffer (agg_video_pad))))
     goto wait_for_data;
   GST_OBJECT_UNLOCK (aggregator);
 
