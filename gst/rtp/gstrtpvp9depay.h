@@ -54,6 +54,7 @@ struct _GstRtpVP9Depay
   GstRTPBaseDepayload parent;
   GstAdapter *adapter;
   gboolean started;
+  gboolean inter_picture;
 
   gint ss_width;
   gint ss_height;
