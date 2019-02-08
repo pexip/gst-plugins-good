@@ -962,9 +962,15 @@ free_session (GstRtpBinSession * sess, GstRtpBin * bin)
 
   gst_element_set_locked_state (sess->demux, TRUE);
   gst_element_set_locked_state (sess->session, TRUE);
+  gst_element_set_locked_state (sess->storage, TRUE);
+  gst_element_set_locked_state (sess->rtp_funnel, TRUE);
+  gst_element_set_locked_state (sess->rtcp_funnel, TRUE);
 
   gst_element_set_state (sess->demux, GST_STATE_NULL);
   gst_element_set_state (sess->session, GST_STATE_NULL);
+  gst_element_set_state (sess->storage, GST_STATE_NULL);
+  gst_element_set_state (sess->rtp_funnel, GST_STATE_NULL);
+  gst_element_set_state (sess->rtcp_funnel, GST_STATE_NULL);
 
   remove_recv_rtp (bin, sess);
   remove_recv_rtcp (bin, sess);
@@ -973,6 +979,9 @@ free_session (GstRtpBinSession * sess, GstRtpBin * bin)
 
   gst_bin_remove (GST_BIN_CAST (bin), sess->session);
   gst_bin_remove (GST_BIN_CAST (bin), sess->demux);
+  gst_bin_remove (GST_BIN_CAST (bin), sess->storage);
+  gst_bin_remove (GST_BIN_CAST (bin), sess->rtp_funnel);
+  gst_bin_remove (GST_BIN_CAST (bin), sess->rtcp_funnel);
 
   g_slist_foreach (sess->elements, (GFunc) remove_bin_element, bin);
   g_slist_free (sess->elements);
