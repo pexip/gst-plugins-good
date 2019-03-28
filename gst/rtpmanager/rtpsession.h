@@ -157,6 +157,15 @@ typedef void (*RTPSessionNotifyNACK) (RTPSession *sess,
     guint16 seqnum, guint16 blp, guint32 ssrc, gpointer user_data);
 
 /**
+ * RTPSessionNotifyTWCC:
+ * @user_data: user data specified when registering
+ *
+ * Notifies of Transport-wide congestion control packets.
+ */
+typedef void (*RTPSessionNotifyTWCC) (RTPSession *sess,
+    GstStructure * twcc_packets, gpointer user_data);
+
+/**
  * RTPSessionReconfigure:
  * @sess: an #RTPSession
  * @user_data: user data specified when registering
@@ -186,6 +195,7 @@ typedef void (*RTPSessionNotifyEarlyRTCP) (RTPSession *sess,
  * @RTPSessionRequestKeyUnit: callback for requesting a new key unit
  * @RTPSessionRequestTime: callback for requesting the current time
  * @RTPSessionNotifyNACK: callback for notifying NACK
+ * @RTPSessionNotifyNACK: callback for notifying TWCC
  * @RTPSessionReconfigure: callback for requesting reconfiguration
  * @RTPSessionNotifyEarlyRTCP: callback for notifying early RTCP
  *
@@ -203,6 +213,7 @@ typedef struct {
   RTPSessionRequestKeyUnit request_key_unit;
   RTPSessionRequestTime request_time;
   RTPSessionNotifyNACK  notify_nack;
+  RTPSessionNotifyTWCC  notify_twcc;
   RTPSessionReconfigure reconfigure;
   RTPSessionNotifyEarlyRTCP notify_early_rtcp;
 } RTPSessionCallbacks;
@@ -281,6 +292,7 @@ struct _RTPSession {
   gpointer              request_key_unit_user_data;
   gpointer              request_time_user_data;
   gpointer              notify_nack_user_data;
+  gpointer              notify_twcc_user_data;
   gpointer              reconfigure_user_data;
   gpointer              notify_early_rtcp_user_data;
 
@@ -298,6 +310,12 @@ struct _RTPSession {
   GList         *conflicting_addresses;
 
   gboolean timestamp_sender_reports;
+
+  /* Transport-wide cc-extension */
+  guint8 twcc_seqnum_ext_id;
+  GArray *twcc_packets;
+  guint8 twcc_fb_pkt_count;
+  gboolean send_twcc_fb_msg;
 
   guint32 nack_probe_ssrc;
   guint nack_probe_pct;
