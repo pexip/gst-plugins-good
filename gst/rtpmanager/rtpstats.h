@@ -74,6 +74,10 @@ typedef struct {
  * @seqnum: the seqnum of the packet
  * @pt: the payload type of the packet
  * @rtptime: the RTP time of the packet
+ * @marker: the marker bit
+ *
+ * @tw_seqnum_ext_id: the extension-header ID for transport-wide seqnums
+ * @tw_seqnum: the transport-wide seqnum of the packet
  *
  * Structure holding information about the packet.
  */
@@ -94,8 +98,11 @@ typedef struct {
   guint16       seqnum;
   guint8        pt;
   guint32       rtptime;
+  gboolean      marker;
   guint32       csrc_count;
   guint32       csrcs[16];
+  guint8        twcc_seqnum_ext_id;
+  gint32        twcc_seqnum;
 } RTPPacketInfo;
 
 /**

@@ -43,6 +43,8 @@
 #define TEST_BUF_SIZE (64000 * TEST_BUF_MS / 1000)
 #define TEST_RTP_TS_DURATION (TEST_BUF_CLOCK_RATE * TEST_BUF_MS / 1000)
 
+#define TEST_TWCC_EXT_ID 5
+
 static GstCaps *
 generate_caps (void)
 {
@@ -52,8 +54,9 @@ generate_caps (void)
 }
 
 static GstBuffer *
-generate_test_buffer_full (GstClockTime dts,
-    guint seq_num, guint32 rtp_ts, guint ssrc)
+generate_test_buffer_full (GstClockTime ts,
+    guint seqnum, guint32 rtp_ts, guint ssrc,
+    gboolean marker_bit, guint8 twcc_ext_id, guint16 twcc_seqnum)
 {
   GstBuffer *buf;
   guint8 *payload;
@@ -61,17 +64,26 @@ generate_test_buffer_full (GstClockTime dts,
   GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
 
   buf = gst_rtp_buffer_new_allocate (TEST_BUF_SIZE, 0, 0);
-  GST_BUFFER_DTS (buf) = dts;
+  GST_BUFFER_PTS (buf) = ts;
+  GST_BUFFER_DTS (buf) = ts;
 
   gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp);
   gst_rtp_buffer_set_payload_type (&rtp, TEST_BUF_PT);
-  gst_rtp_buffer_set_seq (&rtp, seq_num);
+  gst_rtp_buffer_set_seq (&rtp, seqnum);
   gst_rtp_buffer_set_timestamp (&rtp, rtp_ts);
   gst_rtp_buffer_set_ssrc (&rtp, ssrc);
+  gst_rtp_buffer_set_marker (&rtp, marker_bit);
 
   payload = gst_rtp_buffer_get_payload (&rtp);
   for (i = 0; i < TEST_BUF_SIZE; i++)
     payload[i] = 0xff;
+
+  if (twcc_ext_id > 0) {
+    guint8 twcc_seqnum_be[2];
+    GST_WRITE_UINT16_BE (twcc_seqnum_be, twcc_seqnum);
+    gst_rtp_buffer_add_extension_onebyte_header (&rtp, twcc_ext_id,
+        twcc_seqnum_be, sizeof (twcc_seqnum_be));
+  }
 
   gst_rtp_buffer_unmap (&rtp);
 
@@ -79,11 +91,35 @@ generate_test_buffer_full (GstClockTime dts,
 }
 
 static GstBuffer *
-generate_test_buffer (guint seq_num, guint ssrc)
+generate_test_buffer_timed (GstClockTime ts, guint seqnum, guint32 rtp_ts)
 {
-  return generate_test_buffer_full (seq_num * TEST_BUF_DURATION,
-      seq_num, seq_num * TEST_RTP_TS_DURATION, ssrc);
+  return generate_test_buffer_full (ts,
+      seqnum, rtp_ts, TEST_BUF_SSRC, FALSE, 0, 0);
 }
+
+static GstBuffer *
+generate_test_buffer (guint seqnum, guint ssrc)
+{
+  return generate_test_buffer_full (seqnum * TEST_BUF_DURATION,
+      seqnum, seqnum * TEST_RTP_TS_DURATION, ssrc, FALSE, 0, 0);
+}
+
+static GstBuffer *
+generate_twcc_buffer (guint seqnum,
+    GstClockTime arrival_time, gboolean marker_bit)
+{
+  return generate_test_buffer_full (arrival_time, seqnum,
+      seqnum * TEST_RTP_TS_DURATION, TEST_BUF_SSRC, marker_bit,
+      TEST_TWCC_EXT_ID, seqnum);
+}
+
+static GstBuffer *
+generate_marked_buffer (guint seqnum, gboolean marker)
+{
+  return generate_test_buffer_full (seqnum * TEST_BUF_DURATION,
+      seqnum, seqnum * TEST_RTP_TS_DURATION, TEST_BUF_SSRC, marker, 0, 0);
+}
+
 
 typedef struct
 {
@@ -158,6 +194,12 @@ static GstFlowReturn
 session_harness_send_rtp (SessionHarness * h, GstBuffer * buf)
 {
   return gst_harness_push (h->send_rtp_h, buf);
+}
+
+static GstBuffer *
+session_harness_pull_send_rtp (SessionHarness * h)
+{
+  return gst_harness_pull (h->send_rtp_h);
 }
 
 static GstFlowReturn
@@ -2363,26 +2405,26 @@ GST_START_TEST (test_stats_transmission_duration)
 
   /* first frame has transmission duration of 20 ms */
   gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (0 * GST_MSECOND,
-          0, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (0 * GST_MSECOND,
+          0, 0 * TEST_BUF_CLOCK_RATE / 10));
 
   gst_test_clock_set_time (testclock, 10 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (10 * GST_MSECOND,
-          1, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (10 * GST_MSECOND,
+          1, 0 * TEST_BUF_CLOCK_RATE / 10));
 
   gst_test_clock_set_time (testclock, 20 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (20 * GST_MSECOND,
-          2, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (20 * GST_MSECOND,
+          2, 0 * TEST_BUF_CLOCK_RATE / 10));
 
   /* second frame has transmission duration of 0 ms */
   gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (100 * GST_MSECOND,
-          3, 1 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (100 * GST_MSECOND,
+          3, 1 * TEST_BUF_CLOCK_RATE / 10));
 
   /* need third frame to register that second frame is finished */
   gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (200 * GST_MSECOND,
-          4, 2 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (200 * GST_MSECOND,
+          4, 2 * TEST_BUF_CLOCK_RATE / 10));
 
   /* crank to get the stats */
   gst_test_clock_crank (testclock);
@@ -2459,27 +2501,27 @@ GST_START_TEST (test_stats_transmission_duration_reordering)
 
   /* first frame has transmission duration of 20 ms */
   gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (0 * GST_MSECOND,
-          0, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (0 * GST_MSECOND,
+          0, 0 * TEST_BUF_CLOCK_RATE / 10));
 
   gst_test_clock_set_time (testclock, 50 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (50 * GST_MSECOND,
-          1, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (50 * GST_MSECOND,
+          1, 0 * TEST_BUF_CLOCK_RATE / 10));
 
   /* second frame comes before last packet of previous frame  */
   gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (100 * GST_MSECOND,
-          3, 1 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (100 * GST_MSECOND,
+          3, 1 * TEST_BUF_CLOCK_RATE / 10));
 
   /* last packet of first frame arrives */
   gst_test_clock_set_time (testclock, 110 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (110 * GST_MSECOND,
-          2, 0 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (110 * GST_MSECOND,
+          2, 0 * TEST_BUF_CLOCK_RATE / 10));
 
   /* need third frame to register that second frame is finished */
   gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_full (200 * GST_MSECOND,
-          4, 2 * TEST_BUF_CLOCK_RATE / 10, TEST_BUF_SSRC));
+  gst_harness_push (h_rtp, generate_test_buffer_timed (200 * GST_MSECOND,
+          4, 2 * TEST_BUF_CLOCK_RATE / 10));
 
   /* crank to get the stats */
   gst_test_clock_crank (testclock);
@@ -2525,6 +2567,493 @@ GST_START_TEST (test_stats_transmission_duration_reordering)
 
 GST_END_TEST;
 
+typedef struct
+{
+  guint16 base_seqnum;
+  guint16 num_packets;
+  GstClockTime base_time;
+  GstClockTime duration;
+} TWCCTestData;
+
+static TWCCTestData twcc_header_and_run_lenght_test_data[] = {
+  {0, 10, 0, 33 * GST_MSECOND},
+  {65530, 12, 37 * 64 * GST_MSECOND, 10 * GST_MSECOND}, /* seqnum wrap */
+  {99, 200, 1024 * 64 * GST_MSECOND, 10 * GST_MSECOND}, /* many packets */
+  {20000, 23, 0, 250 * GST_USECOND},    /* minimal duration */
+  {56000, 15, 1000 * 64 * GST_MSECOND, 10 * GST_MSECOND},       /* timestamp offset */
+};
+
+GST_START_TEST (test_twcc_header_and_run_length)
+{
+  SessionHarness *h = session_harness_new ();
+  gint i;
+  GstFlowReturn res;
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket packet;
+  guint8 *fci_data;
+  guint16 run_length;
+
+  TWCCTestData *td = &twcc_header_and_run_lenght_test_data[__i__];
+
+  /* enable twcc */
+  g_object_set (h->internal_session,
+      "twcc-seqnum-ext-id", TEST_TWCC_EXT_ID, NULL);
+
+  /* receive some buffers */
+  for (i = 0; i < td->num_packets; i++) {
+    buf = generate_twcc_buffer (i + td->base_seqnum,
+        td->base_time + i * td->duration, i == (td->num_packets - 1));
+    res = session_harness_recv_rtp (h, buf);
+    fail_unless_equals_int (GST_FLOW_OK, res);
+  }
+
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));
+
+  /* first a Receiver Report */
+  fail_unless_equals_int (GST_RTCP_TYPE_RR, gst_rtcp_packet_get_type (&packet));
+  fail_unless (gst_rtcp_packet_move_to_next (&packet));
+
+  /* then a SDES */
+  fail_unless_equals_int (GST_RTCP_TYPE_SDES,
+      gst_rtcp_packet_get_type (&packet));
+  fail_unless (gst_rtcp_packet_move_to_next (&packet));
+
+  /* and then our TWCC Feedback Message */
+  fail_unless_equals_int (GST_RTCP_TYPE_RTPFB,
+      gst_rtcp_packet_get_type (&packet));
+  fail_unless_equals_int (GST_RTCP_RTPFB_TYPE_TWCC,
+      gst_rtcp_packet_fb_get_type (&packet));
+
+  fci_data = gst_rtcp_packet_fb_get_fci (&packet);
+
+  /* base seqnum */
+  fail_unless_equals_int (td->base_seqnum, GST_READ_UINT16_BE (&fci_data[0]));
+
+  /*  packet count */
+  fail_unless_equals_int (td->num_packets, GST_READ_UINT16_BE (&fci_data[2]));
+
+  /* reference time (in 64ms units) */
+  fail_unless_equals_int (td->base_time,
+      GST_READ_UINT24_BE (&fci_data[4]) * 64 * GST_MSECOND);
+
+  /* feedback packet number */
+  fail_unless_equals_int (0, fci_data[7]);
+
+  /* run-length coding */
+  fail_unless_equals_int (0, fci_data[8] & 0x80);
+
+  /* status: small-delta */
+  fail_unless_equals_int (0x20, fci_data[8] & 0x60);
+
+  /* packets in run_length */
+  run_length = *((guint16 *) & fci_data[8]);
+  run_length = run_length & ~0xE0;      /* mask out the 3 last bits */
+  fail_unless_equals_int (td->num_packets, GST_READ_UINT16_BE (&run_length));
+
+  /* first recv-delta always 0 */
+  fail_unless_equals_int (0, fci_data[10]);
+
+  /* following recv-delta equal to duration (in 250us units) */
+  fail_unless_equals_clocktime (td->duration, fci_data[11] * 250 * GST_USECOND);
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+typedef struct
+{
+  guint16 seqnum;
+  GstClockTime timestamp;
+  gboolean marker;
+} TWCCPacket;
+
+#define twcc_verify_packets_to_fci(h, packets, exp_fci)                        \
+G_STMT_START {                                                                 \
+  guint i;                                                                     \
+  GstBuffer *buf;                                                              \
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;                                   \
+  GstRTCPPacket packet;                                                        \
+  guint8 *fci_data;                                                            \
+  guint16 fci_length;                                                          \
+  g_object_set (h->internal_session,                                           \
+      "twcc-seqnum-ext-id", TEST_TWCC_EXT_ID, NULL);                           \
+  for (i = 0; i < G_N_ELEMENTS ((packets)); i++) {                             \
+    TWCCPacket *twcc_pkt = &(packets)[i];                                      \
+    fail_unless_equals_int (GST_FLOW_OK,                                       \
+        session_harness_recv_rtp ((h),                                         \
+            generate_twcc_buffer (twcc_pkt->seqnum,                            \
+                twcc_pkt->timestamp, twcc_pkt->marker)));                      \
+  }                                                                            \
+  session_harness_produce_rtcp ((h), 1);                                       \
+  buf = session_harness_pull_rtcp ((h));                                       \
+  fail_unless (gst_rtcp_buffer_validate (buf));                                \
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);                              \
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &packet));             \
+  fail_unless (gst_rtcp_packet_move_to_next (&packet));                        \
+  fail_unless (gst_rtcp_packet_move_to_next (&packet));                        \
+  fail_unless_equals_int (GST_RTCP_TYPE_RTPFB,                                 \
+      gst_rtcp_packet_get_type (&packet));                                     \
+  fail_unless_equals_int (GST_RTCP_RTPFB_TYPE_TWCC,                            \
+      gst_rtcp_packet_fb_get_type (&packet));                                  \
+  fci_data = gst_rtcp_packet_fb_get_fci (&packet);                             \
+  fci_length = gst_rtcp_packet_fb_get_fci_length (&packet) * sizeof (guint32); \
+  fail_unless_equals_int (fci_length, sizeof (exp_fci));                       \
+  fail_unless_equals_int (0, memcmp (fci_data, (exp_fci), fci_length));        \
+  gst_rtcp_buffer_unmap (&rtcp);                                               \
+  gst_buffer_unref (buf);                                                      \
+  } G_STMT_END
+
+
+#define twcc_verify_packets_to_packets(send_h, recv_h, packets)                \
+G_STMT_START {                                                                 \
+  guint i;                                                                     \
+  GstEvent *event;                                                             \
+  guint num_packets = G_N_ELEMENTS ((packets));                                \
+  GValueArray *packets_array;                                                  \
+  g_object_set ((recv_h)->internal_session,                                    \
+      "twcc-seqnum-ext-id", TEST_TWCC_EXT_ID, NULL);                           \
+  for (i = 0; i < num_packets; i++) {                                          \
+    TWCCPacket *twcc_pkt = &(packets)[i];                                      \
+    fail_unless_equals_int (GST_FLOW_OK,                                       \
+        session_harness_recv_rtp ((recv_h),                                    \
+            generate_twcc_buffer (twcc_pkt->seqnum,                            \
+                twcc_pkt->timestamp, twcc_pkt->marker)));                      \
+  }                                                                            \
+  session_harness_produce_rtcp ((recv_h), 1);                                  \
+  session_harness_recv_rtcp (send_h, session_harness_pull_rtcp ((recv_h)));    \
+  for (guint i = 0; i < 2; i++)                                                \
+    gst_event_unref (gst_harness_pull_upstream_event ((send_h)->send_rtp_h));  \
+  event = gst_harness_pull_upstream_event ((send_h)->send_rtp_h);              \
+  packets_array = g_value_get_boxed (                                          \
+      gst_structure_get_value (gst_event_get_structure (event), "packets"));   \
+  fail_unless_equals_int (packets_array->n_values, num_packets);               \
+  for (guint i = 0; i < packets_array->n_values; i++) {                        \
+    TWCCPacket *twcc_pkt = &(packets)[i];                                      \
+    const GstStructure *pkt_s =                                                \
+        gst_value_get_structure (g_value_array_get_nth (packets_array, i));    \
+    guint seqnum;                                                              \
+    GstClockTime ts;                                                           \
+    fail_unless (gst_structure_get_uint (pkt_s, "seqnum", &seqnum));           \
+    fail_unless (gst_structure_get_clock_time (pkt_s, "timestamp", &ts));      \
+    fail_unless_equals_int (twcc_pkt->seqnum, seqnum);                         \
+    fail_unless_equals_clocktime (twcc_pkt->timestamp, ts);                    \
+  }                                                                            \
+  gst_event_unref (event);                                                     \
+  } G_STMT_END
+
+
+GST_START_TEST (test_twcc_1_bit_status_vector)
+{
+  SessionHarness *h = session_harness_new ();
+
+  TWCCPacket packets[] = {
+    {10, 0 * GST_MSECOND, FALSE},
+    {12, 12 * GST_MSECOND, FALSE},
+    {14, 14 * GST_MSECOND, FALSE},
+    {15, 15 * GST_MSECOND, FALSE},
+    {17, 17 * GST_MSECOND, FALSE},
+    {20, 20 * GST_MSECOND, FALSE},
+    {21, 21 * GST_MSECOND, FALSE},
+    {23, 23 * GST_MSECOND, TRUE},
+  };
+
+  guint8 exp_fci[] = {
+    0x00, 0x0a,                 /* base sequence number: 10 */
+    0x00, 0x0e,                 /* packet status count: 14 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x00,                       /* feedback packet count: 0 */
+    0xab, 0x4d,                 /* packet chunk: 1 0 1 0 1 0 1 1 | 0 1 0 0 1 1 0 1 */
+    0x00, 0x30, 0x08, 0x04, 0x08, 0x0c, 0x04, 0x08, /* recv deltas */
+    0x00, 0x00, /* padding */
+  };
+
+  /* check we get the expected fci */
+  twcc_verify_packets_to_fci (h, packets, exp_fci);
+
+  /* and check we can parse this back to the original packets */
+  twcc_verify_packets_to_packets (h, h, packets);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_2_bit_status_vector)
+{
+  SessionHarness *h = session_harness_new ();
+
+  TWCCPacket packets[] = {
+    {5, 5 * 64 * GST_MSECOND, FALSE},
+    {7, 7 * 64 * GST_MSECOND, FALSE},
+    {8, 8 * 64 * GST_MSECOND, FALSE},
+    {11, 12 * 64 * GST_MSECOND, TRUE},
+  };
+
+  guint8 exp_fci[] = {
+    0x00, 0x05,                 /* base sequence number: 5 */
+    0x00, 0x07,                 /* packet status count: 7 */
+    0x00, 0x00, 0x05,           /* reference time: 5 */
+    0x00,                       /* feedback packet count: 0 */
+    0xd2, 0x82,                 /* packet chunk: 1 1 0 1 0 0 1 0 | 1 0 0 0 0 0 1 0 */
+    /* normal, missing, large, large, missing, missing, large */
+    0x00, 0x02, 0x00, 0x01, 0x00, 0x04, 0x00 ,   /* recv deltas normal + 3xlarge */
+    0x00, 0x00, 0x00, /* padding */
+  };
+
+  twcc_verify_packets_to_fci (h, packets, exp_fci);
+
+  twcc_verify_packets_to_packets (h, h, packets);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_double_packets)
+{
+  SessionHarness *h = session_harness_new ();
+
+  TWCCPacket packets0[] = {
+    {11, 11 * GST_MSECOND, FALSE},
+    {12, 12 * GST_MSECOND, TRUE},
+  };
+
+  TWCCPacket packets1[] = {
+    {13, 13 * GST_MSECOND, FALSE},
+    {14, 14 * GST_MSECOND, FALSE},
+    {15, 15 * GST_MSECOND, TRUE},
+  };
+
+  guint8 exp_fci0[] = {
+    0x00, 0x0b,                 /* base sequence number: 11 */
+    0x00, 0x02,                 /* packet status count: 14 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x00,                       /* feedback packet count: 0 */
+    0x20, 0x02,                 /* packet chunk: 0 0 1 0 0 0 0 0 | 0 0 0 0 0 0 1 0 */
+    0x00, 0x04,                 /* recv deltas */
+  };
+
+  guint8 exp_fci1[] = {
+    0x00, 0x0d,                 /* base sequence number: 13 */
+    0x00, 0x03,                 /* packet status count: 3 */
+    0x00, 0x00, 0x00,           /* reference time: 0 */
+    0x01,                       /* feedback packet count: 1 */
+    0x20, 0x03,                 /* packet chunk: 0 0 1 0 0 0 0 0 | 0 0 0 0 0 0 1 1 */
+    0x00, 0x04, 0x04,           /* recv deltas */
+    0x00, 0x00, 0x00,           /* padding */
+  };
+
+  twcc_verify_packets_to_fci (h, packets0, exp_fci0);
+  twcc_verify_packets_to_fci (h, packets1, exp_fci1);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_huge_seqnum_gap)
+{
+  SessionHarness *h = session_harness_new ();
+
+  TWCCPacket packets[] = {
+    {9, 4 * 32 * GST_MSECOND, FALSE},
+    {10, 5 * 32 * GST_MSECOND, FALSE},
+    {30011, 6 * 32 * GST_MSECOND, FALSE},
+    {30012, 7 * 32 * GST_MSECOND, FALSE},
+    {30013, 8 * 32 * GST_MSECOND, TRUE},
+  };
+
+  guint8 exp_fci[] = {
+    0x00, 0x09,                 /* base sequence number: 9 */
+    0x75, 0x35,                 /* packet status count: 30005 */
+    0x00, 0x00, 0x02,           /* reference time: 2 */
+    0x00,                       /* feedback packet count: 0 */
+    /* packet chunks: */
+    0xb0, 0x00,                 /* 1 bit 2 there, 12 lost: 1 0 1 1 0 0 0 0 | 0 0 0 0 0 0 0 0 */
+    0x1f, 0xff,                 /* run-length: 8191 lost:  0 0 0 1 1 1 1 1 | 1 1 1 1 1 1 1 1 */
+    0x1f, 0xff,                 /* run-length: 8191 lost:  0 0 0 1 1 1 1 1 | 1 1 1 1 1 1 1 1 */
+    0x1f, 0xff,                 /* run-length: 8191 lost:  0 0 0 1 1 1 1 1 | 1 1 1 1 1 1 1 1 */
+    0x15, 0x27,                 /* run-length: 5415 lost:  0 0 0 1 0 1 0 1 | 0 0 1 0 0 1 1 1 */
+    /* 12 + 8191 + 8191 + 8191 + 5415 = 30000 lost packets */
+    0xb8, 0x00,                 /* 1 bit 3 there         : 1 0 1 1 1 0 0 0 | 0 0 0 0 0 0 0 0 */
+
+    0x00, 0x80, 0x80, 0x80, 0x80,       /* recv deltas */
+    0x00, 0x00, 0x00, /* padding */
+  };
+
+  twcc_verify_packets_to_fci (h, packets, exp_fci);
+
+  twcc_verify_packets_to_packets (h, h, packets);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_ignore_duplicate_seqnums)
+{
+  SessionHarness *h = session_harness_new ();
+
+  TWCCPacket packets[] = {
+    {1, 4 * 32 * GST_MSECOND, FALSE},
+    {2, 5 * 32 * GST_MSECOND, FALSE},
+    {2, 6 * 32 * GST_MSECOND, FALSE},
+    {2, 7 * 32 * GST_MSECOND, FALSE},
+    {3, 8 * 32 * GST_MSECOND, TRUE},
+  };
+
+  guint8 exp_fci[] = {
+    0x00, 0x01,             /* base sequence number: 1 */
+    0x00, 0x03,             /* packet status count: 3 */
+    0x00, 0x00, 0x02,       /* reference time: 2 */
+    0x00,                   /* feedback packet count: 0 */
+    /* packet chunks: */
+    0xd6, 0x00,             /* 1 1 0 1 0 1 1 0 | 0 0 0 0 0 0 0 0 */
+
+    0x00, 0x80, 0x01, 0x80, /* recv deltas */
+    0x00, 0x00,             /* padding */
+  };
+
+  twcc_verify_packets_to_fci (h, packets, exp_fci);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_multiple_markers)
+{
+  SessionHarness *h = session_harness_new ();
+
+  TWCCPacket packets[] = {
+    {1, 1 * 32 * GST_MSECOND, FALSE},
+    {2, 2 * 32 * GST_MSECOND, FALSE},
+    {3, 3 * 32 * GST_MSECOND, TRUE},
+    {4, 4 * 32 * GST_MSECOND, FALSE},
+    {5, 5 * 32 * GST_MSECOND, TRUE},
+  };
+
+  guint8 exp_fci[] = {
+    0x00, 0x01,             /* base sequence number: 1 */
+    0x00, 0x03,             /* packet status count: 3 */
+    0x00, 0x00, 0x02,       /* reference time: 2 */
+    0x00,                   /* feedback packet count: 0 */
+    /* packet chunks: */
+    0xd6, 0x00,             /* 1 1 0 1 0 1 1 0 | 0 0 0 0 0 0 0 0 */
+
+    0x00, 0x80, 0x01, 0x80, /* recv deltas */
+    0x00, 0x00,             /* padding */
+  };
+
+  twcc_verify_packets_to_fci (h, packets, exp_fci);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+static GstBuffer *
+generate_twcc_feedback_rtcp (guint8 * fci_data, guint16 fci_length)
+{
+  GstRTCPPacket packet;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstBuffer *buffer = gst_rtcp_buffer_new (1000);
+  guint8 *fci;
+
+  fail_unless (gst_rtcp_buffer_map (buffer, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RTPFB,
+          &packet));
+  gst_rtcp_packet_fb_set_type (&packet, GST_RTCP_RTPFB_TYPE_TWCC);
+  gst_rtcp_packet_fb_set_fci_length (&packet, fci_length);
+  fci = gst_rtcp_packet_fb_get_fci (&packet);
+  memcpy (fci, fci_data, fci_length);
+  gst_rtcp_packet_fb_set_sender_ssrc (&packet, TEST_BUF_SSRC);
+  gst_rtcp_packet_fb_set_media_ssrc (&packet, 0);
+  gst_rtcp_buffer_unmap (&rtcp);
+
+  return buffer;
+}
+
+GST_START_TEST (test_twcc_bad_rtcp)
+{
+  SessionHarness *h = session_harness_new ();
+  //guint i;
+  GstBuffer *buf;
+  GstEvent *event;
+  GValueArray *packets_array;
+
+  guint8 fci[] = {
+    0xff, 0xff,                 /* base sequence number: max */
+    0xff, 0xff,                 /* packet status count: max */
+    0xff, 0xff, 0xff,           /* reference time: max */
+    0xff,                       /* feedback packet count: max */
+    0x3f, 0xff,                 /* packet chunk: run-length, max */
+    0x00,                       /* only 1 recv-delta */
+  };
+
+  buf = generate_twcc_feedback_rtcp (fci, sizeof (fci));
+  session_harness_recv_rtcp (h, buf);
+
+  /* two reconfigure events */
+  for (guint i = 0; i < 2; i++)
+    gst_event_unref (gst_harness_pull_upstream_event (h->send_rtp_h));
+
+  event = gst_harness_pull_upstream_event (h->send_rtp_h);
+  packets_array =
+      g_value_get_boxed (gst_structure_get_value (gst_event_get_structure
+          (event), "packets"));
+
+  /* this ends up with 0 packets, due to completely invalid data */
+  fail_unless_equals_int (packets_array->n_values, 0);
+
+  gst_event_unref (event);
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_twcc_send)
+{
+  SessionHarness *h_send = session_harness_new ();
+  SessionHarness *h_recv = session_harness_new ();
+  gint i;
+  GstBuffer *buf;
+
+  /* enable twcc */
+  g_object_set (h_send->internal_session,
+      "twcc-seqnum-ext-id", TEST_TWCC_EXT_ID, NULL);
+  g_object_set (h_recv->internal_session,
+      "twcc-seqnum-ext-id", TEST_TWCC_EXT_ID, NULL);
+
+  /* receive some buffers */
+  for (i = 0; i < 10; i++) {
+    GstFlowReturn res;
+    res = session_harness_send_rtp (h_send, generate_marked_buffer (i, i == 9));
+    fail_unless_equals_int (GST_FLOW_OK, res);
+    buf = session_harness_pull_send_rtp (h_send);
+    res = session_harness_recv_rtp (h_recv, buf);
+    fail_unless_equals_int (GST_FLOW_OK, res);
+  }
+
+  session_harness_produce_rtcp (h_recv, 1);
+  buf = session_harness_pull_rtcp (h_recv);
+  session_harness_recv_rtcp (h_send, buf);
+
+  session_harness_free (h_send);
+  session_harness_free (h_recv);
+}
+
+GST_END_TEST;
 
 static Suite *
 rtpsession_suite (void)
@@ -2565,6 +3094,19 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_report_stats_only_on_regular_rtcp);
   tcase_add_test (tc_chain, test_stats_transmission_duration);
   tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
+
+  tcase_add_loop_test (tc_chain, test_twcc_header_and_run_length,
+      0, G_N_ELEMENTS (twcc_header_and_run_lenght_test_data));
+
+  tcase_add_test (tc_chain, test_twcc_1_bit_status_vector);
+  tcase_add_test (tc_chain, test_twcc_2_bit_status_vector);
+  tcase_add_test (tc_chain, test_twcc_huge_seqnum_gap);
+  tcase_add_test (tc_chain, test_twcc_double_packets);
+  tcase_add_test (tc_chain, test_twcc_ignore_duplicate_seqnums);
+  tcase_skip_broken_test (tc_chain, test_twcc_multiple_markers);
+  tcase_add_test (tc_chain, test_twcc_bad_rtcp);
+  tcase_add_test (tc_chain, test_twcc_send);
+
   return s;
 }
 
