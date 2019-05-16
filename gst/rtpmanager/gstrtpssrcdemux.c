@@ -334,10 +334,10 @@ find_or_create_demux_pad_for_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc,
   gst_object_ref (rtp_pad);
   gst_object_ref (rtcp_pad);
 
+  INTERNAL_STREAM_UNLOCK (demux);
+
   g_signal_emit (G_OBJECT (demux),
       gst_rtp_ssrc_demux_signals[SIGNAL_NEW_SSRC_PAD], 0, ssrc, rtp_pad);
-
-  INTERNAL_STREAM_UNLOCK (demux);
 
   gst_object_unref (rtp_pad);
   gst_object_unref (rtcp_pad);
