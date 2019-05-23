@@ -413,7 +413,9 @@ subdir('gst')
 subdir('sys')
 subdir('ext')
 subdir('tests')
-subdir('docs')
+if not get_option('doc').disabled()
+  subdir('docs')
+endif
 
 if have_orcc
   update_orc_dist_files = find_program('scripts/update-orc-dist-files.py')
