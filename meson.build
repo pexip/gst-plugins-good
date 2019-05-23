@@ -371,7 +371,9 @@ subdir('sys')
 subdir('ext')
 subdir('tests')
 subdir('pkgconfig')
-subdir('docs')
+if not get_option('doc').disabled()
+  subdir('docs')
+endif
 
 # xgettext is optional (on Windows for instance)
 if find_program('xgettext', required : get_option('nls')).found()
