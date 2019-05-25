@@ -289,9 +289,6 @@ struct _GstRtpJitterBufferPrivate
   guint64 out_offset;
   guint32 segment_seqnum;
 
-  gboolean timer_running;
-  GThread *timer_thread;
-
   /* properties */
   guint latency_ms;
   guint64 latency_ns;
@@ -362,9 +359,7 @@ struct _GstRtpJitterBufferPrivate
 
   /* for sync */
   GstSegment segment;
-  GstClockID clock_id;
-  GstClockTime timer_timeout;
-  guint16 timer_seqnum;
+
   /* the latency of the upstream peer, we have to take this into account when
    * synchronizing the buffers. */
   GstClockTime peer_latency;
@@ -485,7 +480,7 @@ gst_rtp_jitter_buffer_set_active (GstRtpJitterBuffer * jitterbuffer,
     gboolean active, guint64 base_time);
 static void do_handle_sync (GstRtpJitterBuffer * jitterbuffer);
 
-static void unschedule_current_timer (GstRtpJitterBuffer * jitterbuffer);
+static void unschedule_timer_thread_sync (GstRtpJitterBuffer * jitterbuffer);
 static void remove_all_timers (GstRtpJitterBuffer * jitterbuffer);
 
 static void timer_thread_func (GstRtpJitterBuffer * jitterbuffer);
@@ -1651,9 +1646,9 @@ gst_rtp_jitter_buffer_change_state (GstElement * element,
       priv->last_pt = -1;
       /* block until we go to PLAYING */
       priv->blocked = TRUE;
-      priv->timer_running = TRUE;
+      priv->jbtimers->timer_running = TRUE;
       priv->srcresult = GST_FLOW_OK;
-      priv->timer_thread =
+      priv->jbtimers->timer_thread =
           g_thread_new ("timer", (GThreadFunc) timer_thread_func, jitterbuffer);
       JBUF_UNLOCK (priv);
       break;
@@ -1682,7 +1677,7 @@ gst_rtp_jitter_buffer_change_state (GstElement * element,
       JBUF_LOCK (priv);
       /* block to stop streaming when PAUSED */
       priv->blocked = TRUE;
-      unschedule_current_timer (jitterbuffer);
+      unschedule_timer_thread_sync (jitterbuffer);
       JBUF_UNLOCK (priv);
       if (ret != GST_STATE_CHANGE_FAILURE)
         ret = GST_STATE_CHANGE_NO_PREROLL;
@@ -1690,15 +1685,15 @@ gst_rtp_jitter_buffer_change_state (GstElement * element,
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       JBUF_LOCK (priv);
       gst_buffer_replace (&priv->last_sr, NULL);
-      priv->timer_running = FALSE;
+      priv->jbtimers->timer_running = FALSE;
       priv->srcresult = GST_FLOW_FLUSHING;
-      unschedule_current_timer (jitterbuffer);
+      unschedule_timer_thread_sync (jitterbuffer);
       JBUF_SIGNAL_TIMER (priv);
       JBUF_SIGNAL_QUERY (priv, FALSE);
       JBUF_SIGNAL_QUEUE (priv);
       JBUF_UNLOCK (priv);
-      g_thread_join (priv->timer_thread);
-      priv->timer_thread = NULL;
+      g_thread_join (priv->jbtimers->timer_thread);
+      priv->jbtimers->timer_thread = NULL;
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       break;
@@ -2091,14 +2086,15 @@ find_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
 }
 
 static void
-unschedule_current_timer (GstRtpJitterBuffer * jitterbuffer)
+unschedule_timer_thread_sync (GstRtpJitterBuffer * jitterbuffer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  JBTimers *jbtimers = priv->jbtimers;
 
-  if (priv->clock_id) {
-    GST_DEBUG_OBJECT (jitterbuffer, "unschedule current timer");
-    gst_clock_id_unschedule (priv->clock_id);
-    priv->clock_id = NULL;
+  if (jbtimers->clock_id) {
+    GST_DEBUG_OBJECT (jitterbuffer, "waking up timer thread");
+    gst_clock_id_unschedule (jbtimers->clock_id);
+    jbtimers->clock_id = NULL;
   }
 }
 
@@ -2121,21 +2117,25 @@ timer_set_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer, GstCloc
     timer->timeout = apply_offset (jitterbuffer, timer->timeout);
     timer->timeout += priv->latency_ns;
   }
+
+  /* add latency of peer to get input time */
+  timer->timeout += priv->peer_latency;
 }
 
 static void
-recalculate_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
+unschedule_timer_thread_sync_if_timer_expired (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  JBTimers *jbtimers = priv->jbtimers;
 
-  if (priv->clock_id) {
+  if (jbtimers->clock_id) {
     GstClockTime timeout = timer->timeout;
 
     GST_DEBUG ("%" GST_TIME_FORMAT " <> %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (timeout), GST_TIME_ARGS (priv->timer_timeout));
+        GST_TIME_ARGS (timeout), GST_TIME_ARGS (jbtimers->timer_timeout));
 
-    if (timeout == GST_CLOCK_TIME_NONE || timeout < priv->timer_timeout)
-      unschedule_current_timer (jitterbuffer);
+    if (timeout == GST_CLOCK_TIME_NONE || timeout < jbtimers->timer_timeout)
+      unschedule_timer_thread_sync (jitterbuffer);
   }
 }
 
@@ -2145,6 +2145,7 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
     GstClockTime duration)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  JBTimers *jbtimers = priv->jbtimers;
   TimerData *timer;
   gint len;
 
@@ -2153,9 +2154,9 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
       GST_TIME_FORMAT, type, seqnum, GST_TIME_ARGS (timeout),
       GST_TIME_ARGS (delay));
 
-  len = priv->jbtimers->timers->len;
-  g_array_set_size (priv->jbtimers->timers, len + 1);
-  timer = &g_array_index (priv->jbtimers->timers, TimerData, len);
+  len = jbtimers->timers->len;
+  g_array_set_size (jbtimers->timers, len + 1);
+  timer = &g_array_index (jbtimers->timers, TimerData, len);
   timer->idx = len;
   timer->type = type;
   timer->seqnum = seqnum;
@@ -2171,7 +2172,7 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
   timer->rtx_last = GST_CLOCK_TIME_NONE;
   timer->num_rtx_retry = 0;
   timer->num_rtx_received = 0;
-  recalculate_timer (jitterbuffer, timer);
+  unschedule_timer_thread_sync_if_timer_expired (jitterbuffer, timer);
   JBUF_SIGNAL_TIMER (priv);
 
   return timer;
@@ -2182,6 +2183,7 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     guint16 seqnum, GstClockTime timeout, GstClockTime delay, gboolean reset)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  JBTimers *jbtimers = priv->jbtimers;
   gboolean seqchange, timechange;
   guint16 oldseq;
   GstClockTime old_timeout;
@@ -2221,15 +2223,15 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     timer->num_rtx_received = 0;
   }
 
-  if (priv->clock_id) {
+  if (jbtimers->clock_id) {
     /* we changed the seqnum and there is a timer currently waiting with this
      * seqnum, unschedule it */
-    if (seqchange && priv->timer_seqnum == oldseq)
-      unschedule_current_timer (jitterbuffer);
+    if (seqchange && jbtimers->timer_seqnum == oldseq)
+      unschedule_timer_thread_sync (jitterbuffer);
     /* we changed the time, check if it is earlier than what we are waiting
      * for and unschedule if so */
     else if (timechange)
-      recalculate_timer (jitterbuffer, timer);
+      unschedule_timer_thread_sync_if_timer_expired (jitterbuffer, timer);
   }
 }
 
@@ -2237,17 +2239,18 @@ static void
 remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  JBTimers *jbtimers = priv->jbtimers;
   guint idx;
 
   if (timer->idx == -1)
     return;
 
-  if (priv->clock_id && priv->timer_seqnum == timer->seqnum)
-    unschedule_current_timer (jitterbuffer);
+  if (jbtimers->clock_id && jbtimers->timer_seqnum == timer->seqnum)
+    unschedule_timer_thread_sync (jitterbuffer);
 
   idx = timer->idx;
   GST_DEBUG_OBJECT (jitterbuffer, "removed index %d", idx);
-  g_array_remove_index_fast (priv->jbtimers->timers, idx);
+  g_array_remove_index_fast (jbtimers->timers, idx);
   timer->idx = idx;
 
   JBUF_SIGNAL_TIMER (priv);
@@ -2259,7 +2262,7 @@ remove_all_timers (GstRtpJitterBuffer * jitterbuffer)
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GST_DEBUG_OBJECT (jitterbuffer, "removed all timers");
   g_array_set_size (priv->jbtimers->timers, 0);
-  unschedule_current_timer (jitterbuffer);
+  unschedule_timer_thread_sync (jitterbuffer);
   JBUF_SIGNAL_TIMER (priv);
 }
 
@@ -2296,12 +2299,12 @@ get_rtx_delay (GstRtpJitterBufferPrivate * priv)
 static gboolean
 already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
 {
-  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  JBTimers *jbtimers = jitterbuffer->priv->jbtimers;
   gint i, len;
 
-  len = priv->jbtimers->timers->len;
+  len = jbtimers->timers->len;
   for (i = 0; i < len; i++) {
-    TimerData *test = &g_array_index (priv->jbtimers->timers, TimerData, i);
+    TimerData *test = &g_array_index (jbtimers->timers, TimerData, i);
     gint gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
 
     if (test->num > 1 && test->type == TIMER_TYPE_LOST && gap >= 0 &&
@@ -3212,9 +3215,9 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
 
     /* let's unschedule and unblock any waiting buffers. We only want to do this
      * when the head buffer changed */
-    if (G_UNLIKELY (priv->clock_id)) {
+    if (G_UNLIKELY (priv->jbtimers->clock_id)) {
       GST_DEBUG_OBJECT (jitterbuffer, "Unscheduling waiting new buffer");
-      unschedule_current_timer (jitterbuffer);
+      unschedule_timer_thread_sync (jitterbuffer);
     }
   }
 
@@ -3502,7 +3505,7 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
     g_assert (priv->eos);
     while (priv->jbtimers->timers->len > 0) {
       /* Stopping timers */
-      unschedule_current_timer (jitterbuffer);
+      unschedule_timer_thread_sync (jitterbuffer);
       JBUF_WAIT_TIMER (priv);
     }
   }
@@ -4002,10 +4005,11 @@ static void
 timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+  JBTimers *jbtimers = priv->jbtimers;
   GstClockTime now = 0;
 
   JBUF_LOCK (priv);
-  while (priv->timer_running) {
+  while (jbtimers->timer_running) {
     TimerData *timer = NULL;
     GstClockTime timer_timeout = GST_CLOCK_TIME_NONE;
     gint i, len;
@@ -4031,12 +4035,12 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 
     /* Clear expired rtx-stats timers */
     if (priv->do_retransmission)
-      timer_queue_clear_until (priv->jbtimers->rtx_stats_timers, now);
+      timer_queue_clear_until (jbtimers->rtx_stats_timers, now);
 
     /* Iterate "normal" timers */
-    len = priv->jbtimers->timers->len;
+    len = jbtimers->timers->len;
     for (i = 0; i < len;) {
-      TimerData *test = &g_array_index (priv->jbtimers->timers, TimerData, i);
+      TimerData *test = &g_array_index (jbtimers->timers, TimerData, i);
       GstClockTime test_timeout = test->timeout;
       gboolean save_best = FALSE;
 
@@ -4050,11 +4054,11 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
           (test_timeout == GST_CLOCK_TIME_NONE || test_timeout <= now)) {
         GST_DEBUG_OBJECT (jitterbuffer, "Weeding out late entry");
         do_lost_timeout (jitterbuffer, test, now);
-        if (!priv->timer_running)
+        if (!jbtimers->timer_running)
           break;
         /* We don't move the iterator forward since we just removed the current entry,
          * but we update the termination condition */
-        len = priv->jbtimers->timers->len;
+        len = jbtimers->timers->len;
       } else {
         /* find the smallest timeout */
         if (timer == NULL) {
@@ -4100,7 +4104,7 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 
         do_timeout (jitterbuffer, timer, now);
         /* check here, do_timeout could have released the lock */
-        if (!priv->timer_running)
+        if (!jbtimers->timer_running)
           break;
         continue;
       }
@@ -4117,17 +4121,15 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 
       /* prepare for sync against clock */
       sync_time = timer_timeout + GST_ELEMENT_CAST (jitterbuffer)->base_time;
-      /* add latency of peer to get input time */
-      sync_time += priv->peer_latency;
 
       GST_DEBUG_OBJECT (jitterbuffer, "sync to timestamp %" GST_TIME_FORMAT
           " with sync time %" GST_TIME_FORMAT,
           GST_TIME_ARGS (timer_timeout), GST_TIME_ARGS (sync_time));
 
       /* create an entry for the clock */
-      id = priv->clock_id = gst_clock_new_single_shot_id (clock, sync_time);
-      priv->timer_timeout = timer_timeout;
-      priv->timer_seqnum = timer->seqnum;
+      id = jbtimers->clock_id = gst_clock_new_single_shot_id (clock, sync_time);
+      jbtimers->timer_timeout = timer_timeout;
+      jbtimers->timer_seqnum = timer->seqnum;
       GST_OBJECT_UNLOCK (jitterbuffer);
 
       /* release the lock so that the other end can push stuff or unlock */
@@ -4136,23 +4138,23 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
       ret = gst_clock_id_wait (id, &clock_jitter);
 
       JBUF_LOCK (priv);
-      if (!priv->timer_running) {
+      if (!jbtimers->timer_running) {
         gst_clock_id_unref (id);
-        priv->clock_id = NULL;
+        jbtimers->clock_id = NULL;
         break;
       }
 
       if (ret != GST_CLOCK_UNSCHEDULED) {
         now = timer_timeout + MAX (clock_jitter, 0);
         GST_DEBUG_OBJECT (jitterbuffer,
-            "sync done, %d, #%d, %" GST_STIME_FORMAT, ret, priv->timer_seqnum,
+            "sync done, %d, #%d, %" GST_STIME_FORMAT, ret, jbtimers->timer_seqnum,
             GST_STIME_ARGS (clock_jitter));
       } else {
         GST_DEBUG_OBJECT (jitterbuffer, "sync unscheduled");
       }
       /* and free the entry */
       gst_clock_id_unref (id);
-      priv->clock_id = NULL;
+      jbtimers->clock_id = NULL;
     } else {
       /* no timers, wait for activity */
       JBUF_WAIT_TIMER (priv);

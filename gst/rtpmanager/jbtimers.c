@@ -212,6 +212,9 @@ jb_timers_finalize (GObject * object)
   g_array_free (jbtimers->timers, TRUE);
   timer_queue_free (jbtimers->rtx_stats_timers);
 
+  g_mutex_clear (&jbtimers->lock);
+  g_cond_clear (&jbtimers->cond);
+
   G_OBJECT_CLASS (jb_timers_parent_class)->finalize (object);
 }
 

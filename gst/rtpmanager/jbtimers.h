@@ -68,7 +68,11 @@ struct _JBTimers
   GMutex lock;
   GCond cond;
 
+  gboolean timer_running;
+  GThread *timer_thread;
+
   GstClock *clock;
+  GstClockID clock_id;
   GstClockTime base_time;
 
   gboolean timer_thread_running;
@@ -76,6 +80,9 @@ struct _JBTimers
 
   GArray *timers;
   TimerQueue *rtx_stats_timers;
+
+  GstClockTime timer_timeout;
+  guint16 timer_seqnum;
 
   /* properties */
   gint rtx_delay_reorder;
