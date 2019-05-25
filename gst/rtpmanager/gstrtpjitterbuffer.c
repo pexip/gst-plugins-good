@@ -2286,7 +2286,7 @@ set_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
   /* find the seqnum timer */
   timer = find_timer (jitterbuffer, seqnum);
   if (timer == NULL) {
-    timer = add_timer (jitterbuffer, type, seqnum, 0, timeout, 0, -1);
+    timer = add_timer (jitterbuffer, type, seqnum, 1, timeout, 0, GST_CLOCK_TIME_NONE);
   } else {
     reschedule_timer (jitterbuffer, timer, seqnum, timeout, 0, FALSE);
   }
@@ -2473,7 +2473,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       reschedule_timer (jitterbuffer, timer, priv->next_in_seqnum, expected,
           delay, TRUE);
     } else {
-      add_timer (jitterbuffer, TIMER_TYPE_EXPECTED, priv->next_in_seqnum, 0,
+      add_timer (jitterbuffer, TIMER_TYPE_EXPECTED, priv->next_in_seqnum, 1,
           expected, delay, priv->packet_spacing);
     }
   } else if (timer && timer->type != TIMER_TYPE_DEADLINE) {
@@ -2622,14 +2622,14 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
       /* minimum delay the expected-timer has "waited" is the elapsed time
        * since expected arrival of the missing packet */
       GstClockTime delay = MAX (rtx_delay, pts - expected_pts);
-      add_timer (jitterbuffer, TIMER_TYPE_EXPECTED, expected, 0, expected_pts,
+      add_timer (jitterbuffer, TIMER_TYPE_EXPECTED, expected, 1, expected_pts,
           delay, duration);
       expected_pts += duration;
       expected++;
     }
   } else {
     while (gst_rtp_buffer_compare_seqnum (expected, seqnum) > 0) {
-      add_timer (jitterbuffer, TIMER_TYPE_LOST, expected, 0, expected_pts, 0,
+      add_timer (jitterbuffer, TIMER_TYPE_LOST, expected, 1, expected_pts, 0,
           duration);
       expected_pts += duration;
       expected++;
@@ -3079,7 +3079,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     /* we don't know what the next_in_seqnum should be, wait for the last
      * possible moment to push this buffer, maybe we get an earlier seqnum
      * while we wait */
-    set_timer (jitterbuffer, TIMER_TYPE_DEADLINE, seqnum, pts);
+    add_timer (jitterbuffer, TIMER_TYPE_DEADLINE, seqnum, 1, pts, 0, GST_CLOCK_TIME_NONE);
 
     do_next_seqnum = TRUE;
     /* take rtptime and pts to calculate packet spacing */
@@ -3471,7 +3471,7 @@ update_estimated_eos (GstRtpJitterBuffer * jitterbuffer,
       GST_TIME_FORMAT, GST_TIME_ARGS (elapsed), GST_TIME_ARGS (estimated));
 
   if (estimated != -1 && priv->estimated_eos != estimated) {
-    set_timer (jitterbuffer, TIMER_TYPE_EOS, -1, estimated);
+    add_timer (jitterbuffer, TIMER_TYPE_EOS, -1, 0, estimated, 0, GST_CLOCK_TIME_NONE);
     priv->estimated_eos = estimated;
   }
 }
