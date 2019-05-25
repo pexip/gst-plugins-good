@@ -111,6 +111,7 @@
 #include "gstrtpjitterbuffer.h"
 #include "rtpjitterbuffer.h"
 #include "rtpstats.h"
+#include "jbtimers.h"
 
 #include <gst/glib-compat-private.h>
 
@@ -266,12 +267,6 @@ enum
 #define GST_BUFFER_IS_RETRANSMISSION(buffer) \
   GST_BUFFER_FLAG_IS_SET (buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION)
 
-typedef struct TimerQueue
-{
-  GQueue *timers;
-  GHashTable *hashtable;
-} TimerQueue;
-
 struct _GstRtpJitterBufferPrivate
 {
   GstPad *sinkpad, *srcpad;
@@ -340,8 +335,7 @@ struct _GstRtpJitterBufferPrivate
   GstClockTime last_in_pts;
   guint32 next_in_seqnum;
 
-  GArray *timers;
-  TimerQueue *rtx_stats_timers;
+  JBTimers *jbtimers;
 
   /* start and stop ranges */
   GstClockTime npt_start;
@@ -400,30 +394,6 @@ struct _GstRtpJitterBufferPrivate
   GstClockTime total_avg_jitter;
   GstClockTime avg_jitter;
 };
-
-typedef enum
-{
-  TIMER_TYPE_EXPECTED,
-  TIMER_TYPE_LOST,
-  TIMER_TYPE_DEADLINE,
-  TIMER_TYPE_EOS
-} TimerType;
-
-typedef struct
-{
-  guint idx;
-  guint16 seqnum;
-  guint num;
-  TimerType type;
-  GstClockTime timeout;
-  GstClockTime duration;
-  GstClockTime rtx_base;
-  GstClockTime rtx_delay;
-  GstClockTime rtx_retry;
-  GstClockTime rtx_last;
-  guint num_rtx_retry;
-  guint num_rtx_received;
-} TimerData;
 
 static GstStaticPadTemplate gst_rtp_jitter_buffer_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
@@ -1028,9 +998,10 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->last_rtptime = -1;
   priv->avg_jitter = 0;
   priv->segment_seqnum = GST_SEQNUM_INVALID;
-  priv->timers = g_array_new (FALSE, TRUE, sizeof (TimerData));
-  priv->rtx_stats_timers = timer_queue_new ();
+
+  priv->jbtimers = jb_timers_new (priv->rtx_delay_reorder);
   priv->jbuf = rtp_jitter_buffer_new ();
+
   g_mutex_init (&priv->jbuf_lock);
   g_cond_init (&priv->jbuf_queue);
   g_cond_init (&priv->jbuf_timer);
@@ -1135,8 +1106,8 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   jitterbuffer = GST_RTP_JITTER_BUFFER (object);
   priv = jitterbuffer->priv;
 
-  g_array_free (priv->timers, TRUE);
-  timer_queue_free (priv->rtx_stats_timers);
+  g_object_unref (priv->jbtimers);
+
   g_mutex_clear (&priv->jbuf_lock);
   g_cond_clear (&priv->jbuf_queue);
   g_cond_clear (&priv->jbuf_timer);
@@ -2062,29 +2033,6 @@ apply_offset (GstRtpJitterBuffer * jitterbuffer, GstClockTime timestamp)
   return timestamp;
 }
 
-static TimerQueue *
-timer_queue_new (void)
-{
-  TimerQueue *queue;
-
-  queue = g_slice_new (TimerQueue);
-  queue->timers = g_queue_new ();
-  queue->hashtable = g_hash_table_new (NULL, NULL);
-
-  return queue;
-}
-
-static void
-timer_queue_free (TimerQueue * queue)
-{
-  if (!queue)
-    return;
-
-  g_hash_table_destroy (queue->hashtable);
-  g_queue_free_full (queue->timers, g_free);
-  g_slice_free (TimerQueue, queue);
-}
-
 static void
 timer_queue_append (TimerQueue * queue, const TimerData * timer,
     GstClockTime timeout, gboolean lost)
@@ -2131,9 +2079,9 @@ find_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
   TimerData *timer = NULL;
   gint i, len;
 
-  len = priv->timers->len;
+  len = priv->jbtimers->timers->len;
   for (i = 0; i < len; i++) {
-    TimerData *test = &g_array_index (priv->timers, TimerData, i);
+    TimerData *test = &g_array_index (priv->jbtimers->timers, TimerData, i);
     if (test->seqnum == seqnum) {
       timer = test;
       break;
@@ -2201,9 +2149,9 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
       GST_TIME_FORMAT, type, seqnum, GST_TIME_ARGS (timeout),
       GST_TIME_ARGS (delay));
 
-  len = priv->timers->len;
-  g_array_set_size (priv->timers, len + 1);
-  timer = &g_array_index (priv->timers, TimerData, len);
+  len = priv->jbtimers->timers->len;
+  g_array_set_size (priv->jbtimers->timers, len + 1);
+  timer = &g_array_index (priv->jbtimers->timers, TimerData, len);
   timer->idx = len;
   timer->type = type;
   timer->seqnum = seqnum;
@@ -2307,7 +2255,7 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
 
   idx = timer->idx;
   GST_DEBUG_OBJECT (jitterbuffer, "removed index %d", idx);
-  g_array_remove_index_fast (priv->timers, idx);
+  g_array_remove_index_fast (priv->jbtimers->timers, idx);
   timer->idx = idx;
 
   JBUF_SIGNAL_TIMER (priv);
@@ -2318,7 +2266,7 @@ remove_all_timers (GstRtpJitterBuffer * jitterbuffer)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GST_DEBUG_OBJECT (jitterbuffer, "removed all timers");
-  g_array_set_size (priv->timers, 0);
+  g_array_set_size (priv->jbtimers->timers, 0);
   unschedule_current_timer (jitterbuffer);
   JBUF_SIGNAL_TIMER (priv);
 }
@@ -2359,9 +2307,9 @@ already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   gint i, len;
 
-  len = priv->timers->len;
+  len = priv->jbtimers->timers->len;
   for (i = 0; i < len; i++) {
-    TimerData *test = &g_array_index (priv->timers, TimerData, i);
+    TimerData *test = &g_array_index (priv->jbtimers->timers, TimerData, i);
     gint gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
 
     if (test->num > 1 && test->type == TIMER_TYPE_LOST && gap >= 0 &&
@@ -2388,9 +2336,9 @@ time_out_reordered_packets (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
   /* go through all timers and unschedule the ones with a large gap */
   if (priv->do_retransmission && priv->rtx_delay_reorder > 0) {
     gint i, len;
-    len = priv->timers->len;
+    len = priv->jbtimers->timers->len;
     for (i = 0; i < len; i++) {
-      TimerData *test = &g_array_index (priv->timers, TimerData, i);
+      TimerData *test = &g_array_index (priv->jbtimers->timers, TimerData, i);
       gint gap;
 
       gap = gst_rtp_buffer_compare_seqnum (test->seqnum, seqnum);
@@ -2447,7 +2395,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
          * requested retransmission more than once since we may receive
          * several retransmitted packets. For accuracy we should update the
          * stats also when the redundant retransmitted packets arrives. */
-        timer_queue_append (priv->rtx_stats_timers, timer,
+        timer_queue_append (priv->jbtimers->rtx_stats_timers, timer,
             pts + priv->rtx_stats_timeout * GST_MSECOND, FALSE);
       }
     }
@@ -3093,7 +3041,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     GST_DEBUG_OBJECT (jitterbuffer, "expected #%d, got #%d, gap of %d",
         expected, seqnum, gap);
 
-    if (G_UNLIKELY (gap > 0 && priv->timers->len >= max_dropout)) {
+    if (G_UNLIKELY (gap > 0 && priv->jbtimers->timers->len >= max_dropout)) {
       /* If we have timers for more than RTP_MAX_DROPOUT packets
        * pending this means that we have a huge gap overall. We can
        * reset the jitterbuffer at this point because there's
@@ -3101,7 +3049,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
        * sensible with the past data. Just try again from the
        * next packet */
       GST_WARNING_OBJECT (jitterbuffer, "%d pending timers > %d - resetting",
-          priv->timers->len, max_dropout);
+          priv->jbtimers->timers->len, max_dropout);
       gst_buffer_unref (buffer);
       return gst_rtp_jitter_buffer_reset (jitterbuffer, pad, parent, seqnum);
     }
@@ -3164,7 +3112,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   timer = find_timer (jitterbuffer, seqnum);
   if (GST_BUFFER_IS_RETRANSMISSION (buffer)) {
     if (!timer)
-      timer = timer_queue_find (priv->rtx_stats_timers, seqnum);
+      timer = timer_queue_find (priv->jbtimers->rtx_stats_timers, seqnum);
     if (timer)
       timer->num_rtx_received++;
   }
@@ -3560,7 +3508,7 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
   if (type == ITEM_TYPE_EVENT && outevent &&
       GST_EVENT_TYPE (outevent) == GST_EVENT_EOS) {
     g_assert (priv->eos);
-    while (priv->timers->len > 0) {
+    while (priv->jbtimers->timers->len > 0) {
       /* Stopping timers */
       unschedule_current_timer (jitterbuffer);
       JBUF_WAIT_TIMER (priv);
@@ -3978,7 +3926,7 @@ do_lost_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
 
   if (GST_CLOCK_TIME_IS_VALID (timer->rtx_last)) {
     /* Store info to update stats if the packet arrives too late */
-    timer_queue_append (priv->rtx_stats_timers, timer,
+    timer_queue_append (priv->jbtimers->rtx_stats_timers, timer,
         now + priv->rtx_stats_timeout * GST_MSECOND, TRUE);
   }
   remove_timer (jitterbuffer, timer);
@@ -4092,12 +4040,12 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
 
     /* Clear expired rtx-stats timers */
     if (priv->do_retransmission)
-      timer_queue_clear_until (priv->rtx_stats_timers, now);
+      timer_queue_clear_until (priv->jbtimers->rtx_stats_timers, now);
 
     /* Iterate "normal" timers */
-    len = priv->timers->len;
+    len = priv->jbtimers->timers->len;
     for (i = 0; i < len;) {
-      TimerData *test = &g_array_index (priv->timers, TimerData, i);
+      TimerData *test = &g_array_index (priv->jbtimers->timers, TimerData, i);
       GstClockTime test_timeout = get_timeout (jitterbuffer, test);
       gboolean save_best = FALSE;
 
@@ -4115,7 +4063,7 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
           break;
         /* We don't move the iterator forward since we just removed the current entry,
          * but we update the termination condition */
-        len = priv->timers->len;
+        len = priv->jbtimers->timers->len;
       } else {
         /* find the smallest timeout */
         if (timer == NULL) {
