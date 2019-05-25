@@ -2375,20 +2375,13 @@ already_lost (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
   return FALSE;
 }
 
-/* we just received a packet with seqnum and dts.
- *
- * First check for old seqnum that we are still expecting. If the gap with the
- * current seqnum is too big, unschedule the timeouts.
- *
- * If we have a valid packet spacing estimate we can set a timer for when we
- * should receive the next packet.
- * If we don't have a valid estimate, we remove any timer we might have
- * had for this packet.
+/* Time out (reschedule as immediate) the timer of every packet that we
+ * are still expecting where the seqnum precedes the current seqnum by
+ * more than the max reorder distance, and for which we have not yet
+ * sent an RTX request.
  */
 static void
-update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
-    GstClockTime dts, GstClockTime pts, gboolean do_next_seqnum,
-    gboolean is_rtx, TimerData * timer)
+time_out_reordered_packets (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
@@ -2413,6 +2406,27 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       }
     }
   }
+}
+
+
+/* we just received a packet with seqnum and dts.
+ *
+ * First check for old seqnum that we are still expecting. If the gap with the
+ * current seqnum is too big, unschedule the timeouts.
+ *
+ * If we have a valid packet spacing estimate we can set a timer for when we
+ * should receive the next packet.
+ * If we don't have a valid estimate, we remove any timer we might have
+ * had for this packet.
+ */
+static void
+update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
+    GstClockTime dts, GstClockTime pts, gboolean do_next_seqnum,
+    gboolean is_rtx, TimerData * timer)
+{
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
+
+  time_out_reordered_packets (jitterbuffer, seqnum);
 
   do_next_seqnum = do_next_seqnum && priv->packet_spacing > 0
       && priv->do_retransmission && priv->rtx_next_seqnum;
