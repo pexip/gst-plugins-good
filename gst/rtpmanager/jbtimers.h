@@ -43,6 +43,7 @@ typedef struct
   guint16 seqnum;
   guint num;
   TimerType type;
+  GstClockTime lost_packet_pts;
   GstClockTime timeout;
   GstClockTime duration;
   GstClockTime rtx_base;

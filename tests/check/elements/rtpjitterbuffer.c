@@ -2312,7 +2312,7 @@ GST_START_TEST (test_deadline_ts_offset)
   fail_unless_equals_int (GST_FLOW_OK,
       gst_harness_push (h, generate_test_buffer (0)));
 
-  /* wait_next_timeout() syncs on the deadline timer */
+  /* the deadline timer syncs on latency */
   gst_test_clock_wait_for_next_pending_id (testclock, &id);
   fail_unless_equals_uint64 (jb_latency_ms * GST_MSECOND,
       gst_clock_id_get_time (id));
@@ -2321,17 +2321,9 @@ GST_START_TEST (test_deadline_ts_offset)
   /* add ts-offset while waiting */
   g_object_set (h->element, "ts-offset", 20 * GST_MSECOND, NULL);
 
+  /* wait_next_timeout() syncs on the initial deadline timer, and does not
+     take the ts-offset into account */
   gst_test_clock_set_time_and_process (testclock, jb_latency_ms * GST_MSECOND);
-
-  /* wait_next_timeout() syncs on the new deadline timer */
-  gst_test_clock_wait_for_next_pending_id (testclock, &id);
-  fail_unless_equals_uint64 ((20 + jb_latency_ms) * GST_MSECOND,
-      gst_clock_id_get_time (id));
-  gst_clock_id_unref (id);
-
-  /* now make deadline timer timeout */
-  gst_test_clock_set_time_and_process (testclock,
-      (20 + jb_latency_ms) * GST_MSECOND);
 
   gst_buffer_unref (gst_harness_pull (h));
 
