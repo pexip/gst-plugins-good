@@ -2139,6 +2139,8 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
       GST_TIME_FORMAT, type, seqnum, GST_TIME_ARGS (timeout),
       GST_TIME_ARGS (delay));
 
+  JBTIMERS_LOCK (jbtimers);
+
   len = jbtimers->timers->len;
   g_array_set_size (jbtimers->timers, len + 1);
   timer = &g_array_index (jbtimers->timers, TimerData, len);
@@ -2159,6 +2161,8 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
   timer->num_rtx_received = 0;
   unschedule_timer_thread_sync_if_timer_expired (jbtimers, timer);
   JBUF_SIGNAL_TIMER (priv);
+
+  JBTIMERS_UNLOCK (jbtimers);
 }
 
 static void
@@ -2218,6 +2222,7 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
   }
 }
 
+
 static void
 remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
 {
@@ -2228,6 +2233,8 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
   if (timer->idx == -1)
     return;
 
+  JBTIMERS_LOCK (jbtimers);
+
   if (jbtimers->clock_id && jbtimers->timer_seqnum == timer->seqnum)
     unschedule_timer_thread_sync (jbtimers);
 
@@ -2237,6 +2244,8 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
   timer->idx = idx;
 
   JBUF_SIGNAL_TIMER (priv);
+
+  JBTIMERS_UNLOCK (jbtimers);
 }
 
 static void
@@ -2245,10 +2254,12 @@ remove_all_timers (GstRtpJitterBuffer * jitterbuffer)
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   JBTimers *jbtimers = priv->jbtimers;
 
+  JBTIMERS_LOCK (jbtimers);
   GST_DEBUG ("removed all timers");
   g_array_set_size (jbtimers->timers, 0);
   unschedule_timer_thread_sync (jbtimers);
   JBUF_SIGNAL_TIMER (priv);
+  JBTIMERS_UNLOCK (jbtimers);
 }
 
 /* get the extra delay to wait before sending RTX */
@@ -2312,6 +2323,8 @@ time_out_reordered_packets (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
+  JBTIMERS_LOCK (priv->jbtimers);
+
   /* go through all timers and unschedule the ones with a large gap */
   if (priv->do_retransmission && priv->rtx_delay_reorder > 0) {
     gint i, len;
@@ -2333,6 +2346,8 @@ time_out_reordered_packets (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum)
       }
     }
   }
+
+  JBTIMERS_UNLOCK (priv->jbtimers);
 }
 
 
@@ -2397,8 +2412,12 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 
     if (timer) {
       timer->type = TIMER_TYPE_EXPECTED;
+
+      JBTIMERS_LOCK (priv->jbtimers);
       reschedule_timer (jitterbuffer, timer, priv->next_in_seqnum, expected,
           delay, TRUE);
+      JBTIMERS_UNLOCK (priv->jbtimers);
+
     } else {
       add_timer (jitterbuffer, TIMER_TYPE_EXPECTED, priv->next_in_seqnum, 1,
           expected, delay, priv->packet_spacing);
@@ -2538,8 +2557,11 @@ calculate_expected (GstRtpJitterBuffer * jitterbuffer, guint32 expected,
 
       timer->duration = duration;
       if (timeout > (expected_pts + delay) && timer->num_rtx_retry == 0) {
+
+        JBTIMERS_LOCK (priv->jbtimers);
         reschedule_timer (jitterbuffer, timer, timer->seqnum, expected_pts,
             delay, TRUE);
+        JBTIMERS_UNLOCK (priv->jbtimers);
       }
       expected++;
       expected_pts += duration;
@@ -3196,13 +3218,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     /* signal addition of new buffer when the _loop is waiting. */
     if (G_LIKELY (priv->active))
       JBUF_SIGNAL_EVENT (priv);
-
-    /* let's unschedule and unblock any waiting buffers. We only want to do this
-     * when the head buffer changed */
-    if (G_UNLIKELY (priv->jbtimers->clock_id)) {
-      GST_DEBUG_OBJECT (jitterbuffer, "Unscheduling waiting new buffer");
-      unschedule_timer_thread_sync (priv->jbtimers);
-    }
   }
 
   GST_DEBUG_OBJECT (jitterbuffer,
@@ -3838,8 +3853,11 @@ do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     timer->rtx_delay = 0;
     timer->rtx_retry = 0;
   }
+
+  JBTIMERS_LOCK (priv->jbtimers);
   reschedule_timer (jitterbuffer, timer, timer->seqnum,
       timer->rtx_base + timer->rtx_retry, timer->rtx_delay, FALSE);
+  JBTIMERS_UNLOCK (priv->jbtimers);
 
   JBUF_UNLOCK (priv);
   gst_pad_push_event (priv->sinkpad, event);
@@ -3993,6 +4011,8 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
   GstClockTime now = 0;
 
   JBUF_LOCK (priv);
+  JBTIMERS_LOCK (jbtimers);
+
   while (jbtimers->timer_running) {
     TimerData *timer = NULL;
     GstClockTime timer_timeout = GST_CLOCK_TIME_NONE;
@@ -4031,7 +4051,11 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
       if (test->type == TIMER_TYPE_LOST &&
           (test_timeout == GST_CLOCK_TIME_NONE || test_timeout <= now)) {
         GST_DEBUG ("Weeding out late entry");
-        do_lost_timeout (jitterbuffer, test, now);
+
+        JBTIMERS_UNLOCK (jbtimers);
+        do_timeout (jitterbuffer, test, now);
+        JBTIMERS_LOCK (jbtimers);
+
         if (!jbtimers->timer_running)
           break;
         /* We don't move the iterator forward since we just removed the current entry,
@@ -4079,7 +4103,10 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
         /* We have normally removed all lost timers in the loop above */
         g_assert (timer->type != TIMER_TYPE_LOST);
 
+        JBTIMERS_UNLOCK (jbtimers);
         do_timeout (jitterbuffer, timer, now);
+        JBTIMERS_LOCK (jbtimers);
+
         /* check here, do_timeout could have released the lock */
         if (!jbtimers->timer_running)
           break;
@@ -4106,11 +4133,14 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
       jbtimers->timer_seqnum = timer->seqnum;
 
       /* release the lock so that the other end can push stuff or unlock */
+      JBTIMERS_UNLOCK (jbtimers);
       JBUF_UNLOCK (priv);
 
       ret = gst_clock_id_wait (id, &clock_jitter);
 
       JBUF_LOCK (priv);
+      JBTIMERS_LOCK (jbtimers);
+
       if (!jbtimers->timer_running) {
         gst_clock_id_unref (id);
         jbtimers->clock_id = NULL;
@@ -4128,10 +4158,15 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
       gst_clock_id_unref (id);
       jbtimers->clock_id = NULL;
     } else {
+      JBTIMERS_UNLOCK (jbtimers);
+
       /* no timers, wait for activity */
       JBUF_WAIT_TIMER (priv);
+
+      JBTIMERS_LOCK (jbtimers);
     }
   }
+  JBTIMERS_UNLOCK (jbtimers);
   JBUF_UNLOCK (priv);
 
   GST_DEBUG ("we are stopping");

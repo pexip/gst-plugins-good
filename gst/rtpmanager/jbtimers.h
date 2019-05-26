@@ -103,6 +103,31 @@ struct _JBTimers
   }                                                       \
 } G_STMT_END
 
+#define JBTIMERS_LOCK(jbtimers)   G_STMT_START {      \
+    GST_TRACE("Locking from thread %p", g_thread_self()); \
+    (g_mutex_lock (&(jbtimers)->lock));      \
+    GST_TRACE("Locked from thread %p", g_thread_self());  \
+  } G_STMT_END
+
+#define JBTIMERS_UNLOCK(jbtimers) G_STMT_START {      \
+    GST_TRACE ("Unlocking from thread %p", g_thread_self ()); \
+    (g_mutex_unlock (&(jbtimers)->lock));      \
+} G_STMT_END
+
+#define JBTIMERS_WAIT(jbtimers)   G_STMT_START {            \
+  GST_DEBUG ("waiting timer");                            \
+  (jbtimers)->waiting++;                                \
+  g_cond_wait (&(jbtimers)->cond, &(jbtimers)->lock);  \
+  (jbtimers)->waiting--;                                \
+  GST_DEBUG ("waiting timer done");                       \
+} G_STMT_END
+
+#define JBTIMERS_SIGNAL(jbtimers) G_STMT_START {            \
+  if (G_UNLIKELY ((jbtimers)->waiting)) {               \
+    GST_DEBUG ("signal timer, %d waiters", (jbtimers)->waiting); \
+    g_cond_signal (&(jbtimers)->cond);                  \
+  }                                                       \
+} G_STMT_END
 
 GType jb_timers_get_type (void);
 
