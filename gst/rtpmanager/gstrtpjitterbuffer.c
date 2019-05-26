@@ -467,7 +467,7 @@ gst_rtp_jitter_buffer_set_active (GstRtpJitterBuffer * jitterbuffer,
 static void do_handle_sync (GstRtpJitterBuffer * jitterbuffer);
 
 static void unschedule_timer_thread_sync (JBTimers * jbtimers);
-static void remove_all_timers (GstRtpJitterBuffer * jitterbuffer);
+static void remove_all_timers (JBTimers * jbtimers);
 
 static void timer_thread_func (GstRtpJitterBuffer * jitterbuffer);
 
@@ -1575,7 +1575,7 @@ gst_rtp_jitter_buffer_flush_stop (GstRtpJitterBuffer * jitterbuffer)
   rtp_jitter_buffer_flush (priv->jbuf, (GFunc) free_item, NULL);
   rtp_jitter_buffer_disable_buffering (priv->jbuf, FALSE);
   rtp_jitter_buffer_reset_skew (priv->jbuf);
-  remove_all_timers (jitterbuffer);
+  remove_all_timers (priv->jbtimers);
   g_queue_foreach (&priv->gap_packets, (GFunc) gst_buffer_unref, NULL);
   g_queue_clear (&priv->gap_packets);
   JBUF_UNLOCK (priv);
@@ -2229,10 +2229,8 @@ reschedule_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
 
 
 static void
-remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
+remove_timer (JBTimers *jbtimers, TimerData * timer)
 {
-  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
-  JBTimers *jbtimers = priv->jbtimers;
   guint idx;
 
   if (timer->idx == -1)
@@ -2249,16 +2247,12 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
   timer->idx = idx;
 
   JBTIMERS_SIGNAL (jbtimers);
-
   JBTIMERS_UNLOCK (jbtimers);
 }
 
 static void
-remove_all_timers (GstRtpJitterBuffer * jitterbuffer)
+remove_all_timers (JBTimers *jbtimers)
 {
-  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
-  JBTimers *jbtimers = priv->jbtimers;
-
   JBTIMERS_LOCK (jbtimers);
   GST_DEBUG ("removed all timers");
   g_array_set_size (jbtimers->timers, 0);
@@ -2430,7 +2424,7 @@ update_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
   } else if (timer && timer->type != TIMER_TYPE_DEADLINE) {
     /* if we had a timer, remove it, we don't know when to expect the next
      * packet. */
-    remove_timer (jitterbuffer, timer);
+    remove_timer (priv->jbtimers, timer);
   }
 }
 
@@ -2788,7 +2782,7 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
   rtp_jitter_buffer_flush (priv->jbuf,
       (GFunc) free_item_and_retain_events, &events);
   rtp_jitter_buffer_reset_skew (priv->jbuf);
-  remove_all_timers (jitterbuffer);
+  remove_all_timers (priv->jbtimers);
   priv->discont = TRUE;
   priv->last_popped_seqnum = -1;
 
@@ -3933,7 +3927,7 @@ do_lost_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     timer_queue_append (priv->jbtimers->rtx_stats_timers, timer,
         now + priv->rtx_stats_timeout * GST_MSECOND, TRUE);
   }
-  remove_timer (jitterbuffer, timer);
+  remove_timer (priv->jbtimers, timer);
 
   if (head)
     JBUF_SIGNAL_EVENT (priv);
@@ -3948,7 +3942,7 @@ do_eos_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
 
   GST_INFO_OBJECT (jitterbuffer, "got the NPT timeout");
-  remove_timer (jitterbuffer, timer);
+  remove_timer (priv->jbtimers, timer);
   if (!priv->eos) {
     GstEvent *event;
 
@@ -3975,7 +3969,7 @@ do_deadline_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
    * only mess with current ongoing seqnum if still unknown */
   if (priv->next_seqnum == -1)
     priv->next_seqnum = timer->seqnum;
-  remove_timer (jitterbuffer, timer);
+  remove_timer (priv->jbtimers, timer);
   JBUF_SIGNAL_EVENT (priv);
 
   return TRUE;

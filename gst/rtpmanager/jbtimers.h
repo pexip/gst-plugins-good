@@ -90,20 +90,6 @@ struct _JBTimers
 
 };
 
-#define JBUF_WAIT_TIMER(priv)   G_STMT_START {            \
-  GST_DEBUG ("waiting timer");                            \
-  (priv)->waiting_timer++;                                \
-  g_cond_wait (&(priv)->jbuf_timer, &(priv)->jbuf_lock);  \
-  (priv)->waiting_timer--;                                \
-  GST_DEBUG ("waiting timer done");                       \
-} G_STMT_END
-#define JBUF_SIGNAL_TIMER(priv) G_STMT_START {            \
-  if (G_UNLIKELY ((priv)->waiting_timer)) {               \
-    GST_DEBUG ("signal timer, %d waiters", (priv)->waiting_timer); \
-    g_cond_signal (&(priv)->jbuf_timer);                  \
-  }                                                       \
-} G_STMT_END
-
 #define JBTIMERS_LOCK(jbtimers)   G_STMT_START {      \
     GST_TRACE("Locking from thread %p", g_thread_self()); \
     (g_mutex_lock (&(jbtimers)->lock));      \
