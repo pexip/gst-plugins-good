@@ -169,7 +169,8 @@ void
 jb_timers_set_clock_and_base_time (JBTimers * jbtimers, GstClock *clock,
     GstClockTime base_time)
 {
-
+  jbtimers->clock = clock;
+  jbtimers->base_time  = base_time;
 }
 
 #if 0
@@ -208,6 +209,9 @@ static void
 jb_timers_finalize (GObject * object)
 {
   JBTimers *jbtimers = JB_TIMERS (object);
+
+  if (jbtimers->clock)
+    gst_object_unref (jbtimers->clock);
 
   g_array_free (jbtimers->timers, TRUE);
   timer_queue_free (jbtimers->rtx_stats_timers);
