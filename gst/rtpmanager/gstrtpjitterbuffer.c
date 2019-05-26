@@ -1617,6 +1617,8 @@ gst_rtp_jitter_buffer_src_activate_mode (GstPad * pad, GstObject * parent,
   return result;
 }
 
+
+
 static GstStateChangeReturn
 gst_rtp_jitter_buffer_change_state (GstElement * element,
     GstStateChange transition)
@@ -1651,7 +1653,6 @@ gst_rtp_jitter_buffer_change_state (GstElement * element,
       /* unblock to allow streaming in PLAYING */
       priv->blocked = FALSE;
       JBUF_SIGNAL_EVENT (priv);
-      JBUF_SIGNAL_TIMER (priv);
       JBUF_UNLOCK (priv);
       break;
     default:
@@ -1679,10 +1680,14 @@ gst_rtp_jitter_buffer_change_state (GstElement * element,
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       JBUF_LOCK (priv);
       gst_buffer_replace (&priv->last_sr, NULL);
-      priv->jbtimers->timer_running = FALSE;
       priv->srcresult = GST_FLOW_FLUSHING;
+
+      JBTIMERS_LOCK (priv->jbtimers);
+      priv->jbtimers->timer_running = FALSE;
       unschedule_timer_thread_sync (priv->jbtimers);
-      JBUF_SIGNAL_TIMER (priv);
+      JBTIMERS_SIGNAL (priv->jbtimers);
+      JBTIMERS_UNLOCK (priv->jbtimers);
+
       JBUF_SIGNAL_QUERY (priv, FALSE);
       JBUF_SIGNAL_QUEUE (priv);
       JBUF_UNLOCK (priv);
@@ -2160,7 +2165,7 @@ add_timer (GstRtpJitterBuffer * jitterbuffer, TimerType type,
   timer->num_rtx_retry = 0;
   timer->num_rtx_received = 0;
   unschedule_timer_thread_sync_if_timer_expired (jbtimers, timer);
-  JBUF_SIGNAL_TIMER (priv);
+  JBTIMERS_SIGNAL (jbtimers);
 
   JBTIMERS_UNLOCK (jbtimers);
 }
@@ -2243,7 +2248,7 @@ remove_timer (GstRtpJitterBuffer * jitterbuffer, TimerData * timer)
   g_array_remove_index_fast (jbtimers->timers, idx);
   timer->idx = idx;
 
-  JBUF_SIGNAL_TIMER (priv);
+  JBTIMERS_SIGNAL (jbtimers);
 
   JBTIMERS_UNLOCK (jbtimers);
 }
@@ -2258,7 +2263,7 @@ remove_all_timers (GstRtpJitterBuffer * jitterbuffer)
   GST_DEBUG ("removed all timers");
   g_array_set_size (jbtimers->timers, 0);
   unschedule_timer_thread_sync (jbtimers);
-  JBUF_SIGNAL_TIMER (priv);
+  JBTIMERS_SIGNAL (jbtimers);
   JBTIMERS_UNLOCK (jbtimers);
 }
 
@@ -3499,15 +3504,18 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
   }
   msg = check_buffering_percent (jitterbuffer, percent);
 
+#if 0
   if (type == ITEM_TYPE_EVENT && outevent &&
       GST_EVENT_TYPE (outevent) == GST_EVENT_EOS) {
     g_assert (priv->eos);
+
     while (priv->jbtimers->timers->len > 0) {
       /* Stopping timers */
       unschedule_timer_thread_sync (priv->jbtimers);
       JBUF_WAIT_TIMER (priv);
     }
   }
+#endif
 
   JBUF_UNLOCK (priv);
 
@@ -3977,7 +3985,10 @@ static gboolean
 do_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
     GstClockTime now)
 {
+  GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   gboolean removed = FALSE;
+
+  JBUF_LOCK (priv);
 
   switch (timer->type) {
     case TIMER_TYPE_EXPECTED:
@@ -3993,6 +4004,9 @@ do_timeout (GstRtpJitterBuffer * jitterbuffer, TimerData * timer,
       removed = do_eos_timeout (jitterbuffer, timer, now);
       break;
   }
+
+  JBUF_UNLOCK (priv);
+
   return removed;
 }
 
@@ -4010,7 +4024,6 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
   JBTimers *jbtimers = priv->jbtimers;
   GstClockTime now = 0;
 
-  JBUF_LOCK (priv);
   JBTIMERS_LOCK (jbtimers);
 
   while (jbtimers->timer_running) {
@@ -4093,7 +4106,7 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
         i++;
       }
     }
-    if (timer && !priv->blocked) {
+    if (timer) {
       GstClockTime sync_time;
       GstClockID id;
       GstClockReturn ret;
@@ -4134,11 +4147,9 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 
       /* release the lock so that the other end can push stuff or unlock */
       JBTIMERS_UNLOCK (jbtimers);
-      JBUF_UNLOCK (priv);
 
       ret = gst_clock_id_wait (id, &clock_jitter);
 
-      JBUF_LOCK (priv);
       JBTIMERS_LOCK (jbtimers);
 
       if (!jbtimers->timer_running) {
@@ -4158,16 +4169,11 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
       gst_clock_id_unref (id);
       jbtimers->clock_id = NULL;
     } else {
-      JBTIMERS_UNLOCK (jbtimers);
-
       /* no timers, wait for activity */
-      JBUF_WAIT_TIMER (priv);
-
-      JBTIMERS_LOCK (jbtimers);
+      JBTIMERS_WAIT (jbtimers);
     }
   }
   JBTIMERS_UNLOCK (jbtimers);
-  JBUF_UNLOCK (priv);
 
   GST_DEBUG ("we are stopping");
   return;

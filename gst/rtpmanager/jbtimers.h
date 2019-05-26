@@ -69,6 +69,7 @@ struct _JBTimers
   GCond cond;
 
   gboolean timer_running;
+  gint waiting;
   GThread *timer_thread;
 
   GstClock *clock;
