@@ -4010,8 +4010,7 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
       now = gst_clock_get_time (jbtimers->clock) - jbtimers->base_time;
     }
 
-    GST_DEBUG_OBJECT (jitterbuffer, "now %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (now));
+    GST_DEBUG ("now %" GST_TIME_FORMAT, GST_TIME_ARGS (now));
 
     /* Clear expired rtx-stats timers */
     if (priv->do_retransmission)
@@ -4024,15 +4023,14 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
       GstClockTime test_timeout = test->timeout;
       gboolean save_best = FALSE;
 
-      GST_DEBUG_OBJECT (jitterbuffer,
-          "%d, %d, %d, %" GST_TIME_FORMAT " diff:%" GST_STIME_FORMAT, i,
+      GST_DEBUG ("%d, %d, %d, %" GST_TIME_FORMAT " diff:%" GST_STIME_FORMAT, i,
           test->type, test->seqnum, GST_TIME_ARGS (test_timeout),
           GST_STIME_ARGS ((gint64) (test_timeout - now)));
 
       /* Weed out anything too late */
       if (test->type == TIMER_TYPE_LOST &&
           (test_timeout == GST_CLOCK_TIME_NONE || test_timeout <= now)) {
-        GST_DEBUG_OBJECT (jitterbuffer, "Weeding out late entry");
+        GST_DEBUG ("Weeding out late entry");
         do_lost_timeout (jitterbuffer, test, now);
         if (!jbtimers->timer_running)
           break;
@@ -4064,7 +4062,7 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
         }
 
         if (save_best) {
-          GST_DEBUG_OBJECT (jitterbuffer, "new best %d", i);
+          GST_DEBUG ("new best %d", i);
           timer = test;
           timer_timeout = test_timeout;
         }
@@ -4090,15 +4088,15 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 
       if (!jbtimers->clock) {
         /* let's just push if there is no clock */
-        GST_DEBUG_OBJECT (jitterbuffer, "No clock, timeout right away");
+        GST_DEBUG ("No clock, timeout right away");
         now = timer_timeout;
         continue;
       }
 
       /* prepare for sync against clock */
-      sync_time = timer_timeout + GST_ELEMENT_CAST (jitterbuffer)->base_time;
+      sync_time = timer_timeout + jbtimers->base_time;
 
-      GST_DEBUG_OBJECT (jitterbuffer, "sync to timestamp %" GST_TIME_FORMAT
+      GST_DEBUG ("sync to timestamp %" GST_TIME_FORMAT
           " with sync time %" GST_TIME_FORMAT,
           GST_TIME_ARGS (timer_timeout), GST_TIME_ARGS (sync_time));
 
@@ -4121,11 +4119,10 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
 
       if (ret != GST_CLOCK_UNSCHEDULED) {
         now = timer_timeout + MAX (clock_jitter, 0);
-        GST_DEBUG_OBJECT (jitterbuffer,
-            "sync done, %d, #%d, %" GST_STIME_FORMAT, ret, jbtimers->timer_seqnum,
-            GST_STIME_ARGS (clock_jitter));
+        GST_DEBUG ("sync done, %d, #%d, %" GST_STIME_FORMAT, ret,
+            jbtimers->timer_seqnum, GST_STIME_ARGS (clock_jitter));
       } else {
-        GST_DEBUG_OBJECT (jitterbuffer, "sync unscheduled");
+        GST_DEBUG ("sync unscheduled");
       }
       /* and free the entry */
       gst_clock_id_unref (id);
@@ -4137,7 +4134,7 @@ timer_thread_func (GstRtpJitterBuffer * jitterbuffer)
   }
   JBUF_UNLOCK (priv);
 
-  GST_DEBUG_OBJECT (jitterbuffer, "we are stopping");
+  GST_DEBUG ("we are stopping");
   return;
 }
 
