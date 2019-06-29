@@ -13,6 +13,7 @@ rtpmanager_sources = [
   'rtpsession.c',
   'rtpsource.c',
   'rtpstats.c',
+  'rtptwcc.c',
   'gstrtpsession.c',
   'gstrtpfunnel.c',
 ]
