@@ -19,7 +19,10 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#define GLIB_DISABLE_DEPRECATION_WARNINGS
+
 #include "rtpstats.h"
+#include "rtptwcc.h"
 
 void
 gst_rtp_packet_rate_ctx_reset (RTPPacketRateCtx * ctx, gint32 clock_rate)
@@ -427,4 +430,201 @@ __g_socket_address_to_string (GSocketAddress * addr)
   g_free (tmp);
 
   return ret;
+}
+
+static void
+_append_structure_to_value_array (GValueArray * array, GstStructure * s)
+{
+  GValue *val;
+  g_value_array_append (array, NULL);
+  val = g_value_array_get_nth (array, array->n_values - 1);
+  g_value_init (val, GST_TYPE_STRUCTURE);
+  g_value_take_boxed (val, s);
+}
+
+static void
+_structure_take_value_array (GstStructure * s,
+    const gchar * field_name, GValueArray * array)
+{
+  GValue value = G_VALUE_INIT;
+  g_value_init (&value, G_TYPE_VALUE_ARRAY);
+  g_value_take_boxed (&value, array);
+  gst_structure_take_value (s, field_name, &value);
+  g_value_unset (&value);
+}
+
+GstStructure *
+rtp_stats_create_twcc_structure (GArray * twcc_packets)
+{
+  GstStructure *ret = gst_structure_new_empty ("RTPTWCCPackets");
+  GValueArray *array = g_value_array_new (0);
+  guint i;
+
+  for (i = 0; i < twcc_packets->len; i++) {
+    RTPTWCCPacket *pkt = &g_array_index (twcc_packets, RTPTWCCPacket, i);
+
+    GstStructure *pkt_s = gst_structure_new ("RTPTWCCPacket",
+        "seqnum", G_TYPE_UINT, pkt->seqnum,
+        "local-ts", G_TYPE_UINT64, pkt->local_ts,
+        "remote-ts", G_TYPE_UINT64, pkt->remote_ts,
+        "size", G_TYPE_UINT, pkt->size,
+        "lost", G_TYPE_BOOLEAN, pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV,
+        NULL);
+    _append_structure_to_value_array (array, pkt_s);
+  }
+
+  _structure_take_value_array (ret, "packets", array);
+  return ret;
+}
+
+
+static void
+_calculate_deltas (RTPTWCCStats * stats, GArray * twcc_packets)
+{
+  guint i;
+
+  for (i = 0; i < twcc_packets->len; i++) {
+    RTPTWCCPacket *pkt = &g_array_index (twcc_packets, RTPTWCCPacket, i);
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts) &&
+        GST_CLOCK_TIME_IS_VALID (stats->last_local_ts)) {
+      pkt->local_delta = GST_CLOCK_DIFF (stats->last_local_ts, pkt->local_ts);
+    }
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts) &&
+        GST_CLOCK_TIME_IS_VALID (stats->last_remote_ts)) {
+      pkt->remote_delta = GST_CLOCK_DIFF (stats->last_remote_ts, pkt->remote_ts);
+    }
+
+    if (GST_CLOCK_STIME_IS_VALID (pkt->local_delta) &&
+        GST_CLOCK_STIME_IS_VALID (pkt->remote_delta)) {
+      pkt->delta_delta = pkt->remote_delta - pkt->local_delta;
+    }
+
+    stats->last_local_ts = pkt->local_ts;
+    stats->last_remote_ts = pkt->remote_ts;
+  }
+}
+
+static gint
+_get_idx_for_duration (RTPTWCCStats * stats, GstClockTime duration,
+    GstClockTime * local_duration, GstClockTime * remote_duration)
+{
+  RTPTWCCPacket *last = NULL;
+  guint last_idx = stats->packets->len - 1;
+  guint i;
+
+  if (stats->packets->len < 2)
+    return -1;
+
+  for (i = last_idx; i > 0; i--) {
+    RTPTWCCPacket *pkt = &g_array_index (stats->packets, RTPTWCCPacket, i);
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts) &&
+        GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
+      /* first find the last valid packet */
+      if (last == NULL) {
+        last = pkt;
+      } else {
+        /* and then get the duration in local ts */
+        GstClockTimeDiff ld = GST_CLOCK_DIFF (pkt->local_ts, last->local_ts);
+        if (ld >= duration) {
+          *local_duration = ld;
+          *remote_duration = GST_CLOCK_DIFF (pkt->remote_ts, last->remote_ts);
+          return i;
+        }
+      }
+    }
+  }
+
+  return -1;
+}
+
+static void
+_process_stats (RTPTWCCStats * stats)
+{
+  guint i;
+  gint start_idx;
+  guint bits_sent = 0;
+  guint bits_recv = 0;
+  guint packets_recv = 0;
+  guint packets_lost;
+  GstClockTimeDiff delta_delta_sum = 0;
+  guint delta_delta_count = 0;
+  GstClockTime local_duration;
+  GstClockTime remote_duration;
+
+  start_idx = _get_idx_for_duration (stats, 250 * GST_MSECOND,
+      &local_duration, &remote_duration);
+  if (start_idx == -1) {
+    GST_ERROR ("No stats this time!");
+    return;
+  }
+
+  for (i = start_idx; i < stats->packets->len; i++) {
+    RTPTWCCPacket *pkt = &g_array_index (stats->packets, RTPTWCCPacket, i);
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->local_ts)) {
+      bits_sent += pkt->size * 8;
+    }
+
+    if (GST_CLOCK_TIME_IS_VALID (pkt->remote_ts)) {
+      bits_recv += pkt->size * 8;
+      packets_recv++;
+    }
+
+    if GST_CLOCK_STIME_IS_VALID (pkt->delta_delta) {
+      delta_delta_sum += pkt->delta_delta;
+      delta_delta_count++;
+    }
+  }
+  stats->packets_sent = stats->packets->len - start_idx;
+  stats->packets_recv = packets_recv;
+  packets_lost = stats->packets_sent - stats->packets_recv;
+  stats->packet_loss_pct = (packets_lost * 100) / (gfloat)stats->packets_sent;
+
+  if (delta_delta_count) {
+    GstClockTimeDiff avg_delta_of_delta = delta_delta_sum / delta_delta_count;
+    if (GST_CLOCK_STIME_IS_VALID (stats->avg_delta_of_delta)) {
+      stats->avg_delta_of_delta_change = (avg_delta_of_delta - stats->avg_delta_of_delta) / (250 * GST_USECOND);
+    }
+    stats->avg_delta_of_delta = avg_delta_of_delta;
+  }
+
+  stats->bitrate_sent = gst_util_uint64_scale (bits_sent, GST_SECOND, local_duration);
+  stats->bitrate_recv = gst_util_uint64_scale (bits_recv, GST_SECOND, remote_duration);
+
+  GST_ERROR ("Got stats: \nbits_sent: %u, bits_recv: %u, packets_sent = %u, packets_recv: %u, "
+      "packetlost_pct = %f, sent_bitrate = %u, recv_bitrate = %u, "
+      "delta-delta-avg = %"GST_STIME_FORMAT ", delta-delta-change: %f",
+      bits_sent, bits_recv, stats->packets_sent, packets_recv, stats->packet_loss_pct,
+      stats->bitrate_sent, stats->bitrate_recv, GST_STIME_ARGS (stats->avg_delta_of_delta),
+      stats->avg_delta_of_delta_change);
+}
+
+RTPTWCCStats *
+rtp_twcc_stats_new (void)
+{
+  RTPTWCCStats *stats = g_new0 (RTPTWCCStats, 1);
+  stats->packets = g_array_new (FALSE, FALSE, sizeof (RTPTWCCPacket));
+  stats->last_local_ts = GST_CLOCK_TIME_NONE;
+  stats->last_remote_ts = GST_CLOCK_TIME_NONE;
+  stats->avg_delta_of_delta = GST_CLOCK_STIME_NONE;
+  return stats;
+}
+
+void
+rtp_twcc_stats_free (RTPTWCCStats * stats)
+{
+  g_array_unref (stats->packets);
+  g_free (stats);
+}
+
+void
+rtp_twcc_stats_process_packets (RTPTWCCStats * stats, GArray * twcc_packets)
+{
+  _calculate_deltas (stats, twcc_packets);
+
+  g_array_append_vals (stats->packets, twcc_packets->data, twcc_packets->len);
+
+  _process_stats (stats);
 }
