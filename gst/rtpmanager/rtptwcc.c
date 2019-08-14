@@ -89,7 +89,7 @@ typedef struct
   GstClockTime ts;
   guint16 seqnum;
 
-  GstClockTimeDiff delta_ts;
+  gint64 delta;
   RTPTWCCPacketStatus status;
   guint16 missing_run;
   guint equal_run;
@@ -98,8 +98,10 @@ typedef struct
 typedef struct
 {
   GstClockTime ts;
+  GstClockTime remote_ts;
   guint16 seqnum;
   guint size;
+  gboolean lost;
 } SentPacket;
 
 #pragma pack(push)              /* push current alignment to stack */
@@ -145,7 +147,7 @@ rtp_twcc_manager_new (guint mtu)
 
   twcc->recv_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
 
-  twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
+  twcc->sent_packets = g_array_new (FALSE, FALSE, sizeof (SentPacket));
   twcc->parsed_packets = g_array_new (FALSE, FALSE, sizeof (RecvPacket));
 
   twcc->rtcp_buffers = g_queue_new ();
@@ -208,13 +210,12 @@ rtp_twcc_write_recv_deltas (guint8 * fci_data, GArray * twcc_packets)
   guint i;
   for (i = 0; i < twcc_packets->len; i++) {
     RecvPacket *pkt = &g_array_index (twcc_packets, RecvPacket, i);
-    gint64 delta = pkt->delta_ts / DELTA_UNIT;
 
     if (pkt->status == RTP_TWCC_PACKET_STATUS_SMALL_DELTA) {
-      GST_WRITE_UINT8 (fci_data, delta);
+      GST_WRITE_UINT8 (fci_data, pkt->delta);
       fci_data += 1;
     } else if (pkt->status == RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA) {
-      GST_WRITE_UINT16_BE (fci_data, delta);
+      GST_WRITE_UINT16_BE (fci_data, pkt->delta);
       fci_data += 2;
     }
   }
@@ -364,6 +365,11 @@ typedef struct
 static void
 run_lenght_helper_update (RunLengthHelper * rlh, RecvPacket * pkt)
 {
+  /* for missing packets we reset */
+  if (pkt->missing_run > 0) {
+    rlh->equal = NULL;
+  }
+
   /* all status equal run */
   if (rlh->equal == NULL) {
     rlh->equal = pkt;
@@ -375,11 +381,6 @@ run_lenght_helper_update (RunLengthHelper * rlh, RecvPacket * pkt)
   } else {
     rlh->equal = pkt;
     rlh->equal->equal_run = 1;
-  }
-
-  /* for missing packets we reset */
-  if (pkt->missing_run > 0) {
-    rlh->equal = NULL;
   }
 }
 
@@ -431,6 +432,7 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   RecvPacket *first, *last, *prev;
   guint16 packet_count;
   GstClockTime base_time;
+  GstClockTime ts_rounded;
   guint i;
   GArray *packet_chunks = g_array_new (FALSE, FALSE, 2);
   RTPTWCCHeader header;
@@ -443,6 +445,8 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   guint8 *fci_data_ptr;
   RunLengthHelper rlh = { NULL };
   guint num_bits_for_status_vector = 1;
+  GstClockTimeDiff delta_ts;
+  gint64 delta_ts_rounded;
 
   g_array_sort (twcc->recv_packets, _twcc_seqnum_sort);
 
@@ -461,6 +465,7 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
   GST_WRITE_UINT8 (header.fb_pkt_count, twcc->fb_pkt_count);
 
   base_time *= REF_TIME_UNIT;
+  ts_rounded = base_time;
 
   GST_DEBUG ("Created TWCC feedback: base_seqnum: #%u, packet_count: %u, "
       "base_time %" GST_TIME_FORMAT " fb_pkt_count: %u",
@@ -474,12 +479,14 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
     RecvPacket *pkt = &g_array_index (twcc->recv_packets, RecvPacket, i);
     if (i != 0) {
       pkt->missing_run = pkt->seqnum - prev->seqnum - 1;
-      pkt->delta_ts = GST_CLOCK_DIFF (prev->ts, pkt->ts);
-    } else {
-      pkt->delta_ts = GST_CLOCK_DIFF (base_time, pkt->ts);
     }
 
-    if (pkt->delta_ts < 0 || pkt->delta_ts > MAX_TS_DELTA) {
+    delta_ts = GST_CLOCK_DIFF (ts_rounded, pkt->ts);
+    pkt->delta = delta_ts / DELTA_UNIT;
+    delta_ts_rounded = pkt->delta * DELTA_UNIT;
+    ts_rounded += delta_ts_rounded;
+
+    if (delta_ts_rounded < 0 || delta_ts_rounded > MAX_TS_DELTA) {
       pkt->status = RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA;
       recv_deltas_size += 2;
       num_bits_for_status_vector = 2;
@@ -489,9 +496,14 @@ rtp_twcc_manager_add_fci (RTPTWCCManager * twcc, GstRTCPPacket * packet)
     }
     run_lenght_helper_update (&rlh, pkt);
 
-    GST_LOG ("pkt: #%u, delta_ts: %" GST_TIME_FORMAT
+    GST_LOG ("pkt: #%u, ts: %" GST_TIME_FORMAT
+        " ts_rounded: %" GST_TIME_FORMAT
+        " delta_ts: %" GST_STIME_FORMAT
+        " delta_ts_rounded: %" GST_STIME_FORMAT
         " missing_run: %u, status: %u", pkt->seqnum,
-        GST_TIME_ARGS (pkt->delta_ts), pkt->missing_run, pkt->status);
+        GST_TIME_ARGS (pkt->ts), GST_TIME_ARGS (ts_rounded),
+        GST_STIME_ARGS (delta_ts), GST_STIME_ARGS (delta_ts_rounded),
+        pkt->missing_run, pkt->status);
     prev = pkt;
   }
 
@@ -653,6 +665,8 @@ sent_packet_init (SentPacket * packet, RTPPacketInfo * pinfo)
   packet->ts = pinfo->running_time;
   packet->seqnum = pinfo->twcc_seqnum;
   packet->size = pinfo->payload_len;
+  packet->remote_ts = GST_CLOCK_TIME_NONE;
+  packet->lost = FALSE;
 }
 
 void
@@ -698,10 +712,8 @@ _parse_run_length_chunk (TWCCPacketChunk * chunk, GArray * twcc_packets,
   guint run_length = chunk->data & ~0xE0;       /* mask out the 3 last bits */
   run_length = MIN (remaining_packets, GST_READ_UINT16_BE (&run_length));
 
-  if (status_code != RTP_TWCC_PACKET_STATUS_NOT_RECV) {
-    for (guint i = 0; i < run_length; i++) {
-      _add_twcc_packet (twcc_packets, seqnum_offset + i, status_code);
-    }
+  for (guint i = 0; i < run_length; i++) {
+    _add_twcc_packet (twcc_packets, seqnum_offset + i, status_code);
   }
 
   return run_length;
@@ -721,9 +733,7 @@ _parse_status_vector_chunk (TWCCPacketChunk * chunk, GArray * twcc_packets,
       pos -= 16;
     pos /= symbol_size;
     status_code = GET_BITS (chunk->data, pos, symbol_size);
-    if (status_code != RTP_TWCC_PACKET_STATUS_NOT_RECV) {
-      _add_twcc_packet (twcc_packets, seqnum_offset + i, status_code);
-    }
+    _add_twcc_packet (twcc_packets, seqnum_offset + i, status_code);
   }
 
   return num_bits;
@@ -751,7 +761,8 @@ _structure_take_value_array (GstStructure * s,
 }
 
 GstStructure *
-rtp_twcc_parse_fci (guint8 * fci_data, guint fci_length)
+rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
+    guint8 * fci_data, guint fci_length)
 {
   guint16 base_seqnum;
   guint16 packet_count;
@@ -761,12 +772,17 @@ rtp_twcc_parse_fci (guint8 * fci_data, guint fci_length)
   GArray *twcc_packets;
   guint packets_parsed = 0;
   guint fci_parsed;
-  GstClockTime abs_time;
+  GstClockTime ts_rounded;
+  GstClockTimeDiff delta_ts;
   GValueArray *array;
   guint i;
+  SentPacket *first = NULL;
 
   if (fci_length < 10)
     return NULL;
+
+  if (twcc->sent_packets->len > 0)
+    first = &g_array_index (twcc->sent_packets, SentPacket, 0);
 
   base_seqnum = GST_READ_UINT16_BE (&fci_data[0]);
   packet_count = GST_READ_UINT16_BE (&fci_data[2]);
@@ -797,25 +813,51 @@ rtp_twcc_parse_fci (guint8 * fci_data, guint fci_length)
   }
 
   array = g_value_array_new (1);
-  abs_time = base_time;
+  ts_rounded = base_time;
   for (i = 0; i < twcc_packets->len && fci_parsed < fci_length; i++) {
     RecvPacket *pkt = &g_array_index (twcc_packets, RecvPacket, i);
     GstStructure *pkt_s;
+    gboolean lost;
+    gint16 delta = 0;
 
     if (pkt->status == RTP_TWCC_PACKET_STATUS_SMALL_DELTA) {
-      abs_time += fci_data[fci_parsed] * DELTA_UNIT;
+      delta = fci_data[fci_parsed];
       fci_parsed += 1;
     } else if (pkt->status == RTP_TWCC_PACKET_STATUS_LARGE_NEGATIVE_DELTA) {
-      abs_time += GST_READ_UINT16_BE (&fci_data[fci_parsed]) * DELTA_UNIT;
+      delta = GST_READ_UINT16_BE (&fci_data[fci_parsed]);
       fci_parsed += 2;
     }
-    pkt->ts = abs_time;
 
-    GST_LOG ("parsed: pkt: #%u, ts: %" GST_TIME_FORMAT " status: %u",
-        pkt->seqnum, GST_TIME_ARGS (pkt->ts), pkt->status);
+    delta_ts = delta * DELTA_UNIT;
+    ts_rounded += delta_ts;
+
+    pkt->ts = ts_rounded;
+    lost = pkt->status == RTP_TWCC_PACKET_STATUS_NOT_RECV;
+
+    GST_LOG ("pkt: #%u, ts: %" GST_TIME_FORMAT
+        " delta_ts: %" GST_STIME_FORMAT
+        " status: %u", pkt->seqnum,
+        GST_TIME_ARGS (pkt->ts), GST_STIME_ARGS (delta_ts), pkt->status);
+
     pkt_s = gst_structure_new ("RecvPacket",
         "seqnum", G_TYPE_UINT, pkt->seqnum,
-        "timestamp", G_TYPE_UINT64, pkt->ts, NULL);
+        "remote-ts", G_TYPE_UINT64, pkt->ts,
+        "lost", G_TYPE_BOOLEAN, lost, NULL);
+
+    if (first) {
+      SentPacket *found = NULL;
+      guint sent_idx = pkt->seqnum - first->seqnum;
+      found = &g_array_index (twcc->sent_packets, SentPacket, sent_idx);
+
+      if (found && found->seqnum == pkt->seqnum) {
+        found->remote_ts = pkt->ts;
+        found->lost = lost;
+        gst_structure_set (pkt_s,
+            "local-ts", G_TYPE_UINT64, found->ts,
+            "size", G_TYPE_UINT, found->size, NULL);
+      }
+    }
+
     _append_structure_to_value_array (array, pkt_s);
   }
   g_array_unref (twcc_packets);

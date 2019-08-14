@@ -111,7 +111,7 @@ enum
   PROP_RTCP_REDUCED_SIZE,
   PROP_RTCP_DISABLE_SR_TIMESTAMP,
   PROP_TWCC_RECV_EXT_ID,
-  PROP_TWCC_SEND_EXT_ID,
+  PROP_TWCC_SEND_EXT_MAP,
 };
 
 /* update average packet size */
@@ -740,19 +740,19 @@ rtp_session_class_init (RTPSessionClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * RTPSession::twcc-send-ext-id:
+   * RTPSession::twcc-send-ext-map:
    *
    * The RTP header-extension ID used for sending Transport-wide Congestion
-   * Control sequence-numbers.
+   * Control sequence-numbers mapped to payload-numbers.
    *
    * Since: 1.18
    */
-  g_object_class_install_property (gobject_class, PROP_TWCC_SEND_EXT_ID,
-      g_param_spec_uint ("twcc-send-ext-id",
-          "Sending Transport-wide Congestion Control Extension ID",
-          "The RTP header-extension ID to use for Transport-wide "
-          "Congestion Control sequencenumbers (0 = disable)", 0, 15, 0,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_TWCC_SEND_EXT_MAP,
+      g_param_spec_boxed ("twcc-send-ext-map",
+          "Transport-wide Congestion Control Extension Map for sending",
+          "A map of Payload-type to RTP header-extension ID to use for sending"
+          "Transport-wide Congestion Control sequencenumbers",
+          GST_TYPE_STRUCTURE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   klass->get_source_by_ssrc =
       GST_DEBUG_FUNCPTR (rtp_session_get_source_by_ssrc);
@@ -844,6 +844,7 @@ rtp_session_init (RTPSession * sess)
   sess->is_doing_ptp = TRUE;
 
   sess->twcc = rtp_twcc_manager_new (sess->mtu);
+  sess->twcc_send_ext_map = g_hash_table_new (g_direct_hash, g_direct_equal);
 }
 
 static void
@@ -866,6 +867,9 @@ rtp_session_finalize (GObject * object)
     g_hash_table_destroy (sess->ssrcs[i]);
 
   rtp_twcc_manager_free (sess->twcc);
+  g_hash_table_destroy (sess->twcc_send_ext_map);
+  if (sess->twcc_send_ext_map_structure)
+    gst_structure_free (sess->twcc_send_ext_map_structure);
 
   g_mutex_clear (&sess->lock);
 
@@ -941,6 +945,22 @@ rtp_session_create_stats (RTPSession * sess)
   gst_structure_id_take_value (s, quark_source_stats, &source_stats_v);
 
   return s;
+}
+
+static gboolean
+structure_to_hash_table (GQuark field_id, const GValue * value, gpointer hash)
+{
+  const gchar *field_str;
+  guint field_uint;
+  guint value_uint;
+
+  field_str = g_quark_to_string (field_id);
+  field_uint = atoi (field_str);
+  value_uint = g_value_get_uint (value);
+  g_hash_table_insert ((GHashTable *) hash, GUINT_TO_POINTER (field_uint),
+      GUINT_TO_POINTER (value_uint));
+
+  return TRUE;
 }
 
 static void
@@ -1044,8 +1064,15 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_TWCC_RECV_EXT_ID:
       sess->twcc_recv_ext_id = g_value_get_uint (value);
       break;
-    case PROP_TWCC_SEND_EXT_ID:
-      sess->twcc_send_ext_id = g_value_get_uint (value);
+    case PROP_TWCC_SEND_EXT_MAP:
+      RTP_SESSION_LOCK (sess);
+      if (sess->twcc_send_ext_map_structure)
+        gst_structure_free (sess->twcc_send_ext_map_structure);
+      sess->twcc_send_ext_map_structure = g_value_dup_boxed (value);
+      g_hash_table_remove_all (sess->twcc_send_ext_map);
+      gst_structure_foreach (sess->twcc_send_ext_map_structure,
+          structure_to_hash_table, sess->twcc_send_ext_map);
+      RTP_SESSION_UNLOCK (sess);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1138,8 +1165,10 @@ rtp_session_get_property (GObject * object, guint prop_id,
     case PROP_TWCC_RECV_EXT_ID:
       g_value_set_uint (value, sess->twcc_recv_ext_id);
       break;
-    case PROP_TWCC_SEND_EXT_ID:
-      g_value_set_uint (value, sess->twcc_send_ext_id);
+    case PROP_TWCC_SEND_EXT_MAP:
+      RTP_SESSION_LOCK (sess);
+      g_value_set_boxed (value, sess->twcc_send_ext_map);
+      RTP_SESSION_UNLOCK (sess);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -3076,7 +3105,8 @@ rtp_session_process_twcc (RTPSession * sess, guint32 sender_ssrc,
   if (!sess->callbacks.notify_twcc)
     return;
 
-  twcc_packets = rtp_twcc_parse_fci (fci_data, fci_length * sizeof (guint32));
+  twcc_packets = rtp_twcc_manager_parse_fci (sess->twcc,
+      fci_data, fci_length * sizeof (guint32));
   GST_DEBUG_OBJECT (sess, "Received TWCC: %" GST_PTR_FORMAT, twcc_packets);
 
   RTP_SESSION_UNLOCK (sess);
@@ -3374,13 +3404,23 @@ static void
 send_twcc_packet (RTPSession * sess,
     gpointer data, gboolean is_list, RTPPacketInfo * pinfo)
 {
-  if (sess->twcc_send_ext_id == 0)
+  guint8 ext_id;
+
+  if (!sess->twcc_send_ext_map_structure)
+    return;
+
+  ext_id = GPOINTER_TO_UINT (g_hash_table_lookup (sess->twcc_send_ext_map,
+      GUINT_TO_POINTER (pinfo->pt)));
+
+  /* 0 is not a valid ext-id, and can also mean the map for this payload
+     is not added */
+  if (ext_id == 0)
     return;
 
   /* FIXME: what to do with lists? */
   g_assert (is_list == FALSE);
 
-  rtp_twcc_manager_send_packet (sess->twcc, pinfo, sess->twcc_send_ext_id);
+  rtp_twcc_manager_send_packet (sess->twcc, pinfo, ext_id);
 }
 
 

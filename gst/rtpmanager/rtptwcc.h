@@ -40,6 +40,7 @@ void rtp_twcc_manager_send_packet (RTPTWCCManager * twcc,
 GstBuffer * rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
     guint32 sender_ssrc);
 
-GstStructure * rtp_twcc_parse_fci (guint8 * fci_data, guint fci_length);
+GstStructure * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
+    guint8 * fci_data, guint fci_length);
 
 #endif /* __RTP_TWCC_H__ */

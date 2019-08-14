@@ -315,7 +315,8 @@ struct _RTPSession {
   /* Transport-wide cc-extension */
   RTPTWCCManager *twcc;
   guint8 twcc_recv_ext_id;
-  guint8 twcc_send_ext_id;
+  GstStructure *twcc_send_ext_map_structure;
+  GHashTable *twcc_send_ext_map;
 
   guint32 nack_probe_ssrc;
   guint nack_probe_pct;
