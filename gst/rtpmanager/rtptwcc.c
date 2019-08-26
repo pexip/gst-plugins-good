@@ -410,8 +410,9 @@ rtp_twcc_write_chunks (GArray * packet_chunks,
 
       /* we have a run of the same status, write a run-length chunk and skip
          to the next point */
-      if (pkt->equal_run > bits_per_chunks ||
-          pkt->equal_run == remaining_packets) {
+      if (pkt->missing_run == 0 &&
+          (pkt->equal_run > bits_per_chunks ||
+          pkt->equal_run == remaining_packets)) {
         rtp_twcc_write_run_length_chunk (packet_chunks,
             pkt->status, pkt->equal_run);
         i += pkt->equal_run - 1;

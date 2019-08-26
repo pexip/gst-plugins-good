@@ -3380,6 +3380,38 @@ GST_START_TEST (test_twcc_delta_ts_rounding)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_double_gap)
+{
+  SessionHarness *h = session_harness_new ();
+
+  TWCCPacket packets[] = {
+    {1202, 5 * GST_SECOND + 717000000, FALSE},
+    {1215, 5 * GST_SECOND + 760250000, FALSE},
+    {1221, 5 * GST_SECOND + 775500000, TRUE},
+  };
+
+  guint8 exp_fci[] = {
+    0x04, 0xb2,            /* base sequence number: 1202 */
+    0x00, 0x14,            /* packet status count: 20 */
+    0x00, 0x00, 0x59,      /* reference time: 0:00:05.696000000 */
+    0x00,                  /* feedback packet count: 0 */
+    0xa0, 0x01,            /* packet chunk: 1 0 1 0 0 0 0 0 | 0 0 0 0 0 0 0 1 */
+    0x81, 0x00,            /* packet chunk: 1 0 0 0 0 0 0 1 | 0 0 0 0 0 0 0 0 */
+    0x54,                  /* recv delta: +0:00:00.021000000 */
+    0xad,                  /* recv delta: +0:00:00.043250000 */
+    0x3d,                  /* recv delta: +0:00:00.015250000 */
+    0x00,                  /* padding */
+  };
+
+  twcc_verify_packets_to_fci (h, packets, exp_fci);
+
+  twcc_verify_packets_to_packets (h, h, packets);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 GST_START_TEST (test_twcc_send)
 {
   SessionHarness *h_send = session_harness_new ();
@@ -3473,6 +3505,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_no_marker_and_gaps);
   tcase_add_test (tc_chain, test_twcc_bad_rtcp);
   tcase_add_test (tc_chain, test_twcc_delta_ts_rounding);
+  tcase_add_test (tc_chain, test_twcc_double_gap);
   tcase_add_test (tc_chain, test_twcc_send);
 
   return s;
