@@ -3217,6 +3217,31 @@ GST_START_TEST (test_twcc_multiple_markers)
 
 GST_END_TEST;
 
+GST_START_TEST (test_twcc_no_marker_and_gaps)
+{
+  SessionHarness *h = session_harness_new ();
+  guint i;
+
+  g_object_set (h->internal_session, "probation", 1, NULL);
+
+  /* Push packets with gaps and no marker bit. This should not prevent
+     the feedback packets from being sent at all. */
+  for (i = 0; i < 80; i += 10) {
+    TWCCPacket packets[] = { {i, i * 250 * GST_USECOND, FALSE} };
+    twcc_push_packets (h, packets);
+  }
+
+  /* verify we did receive some feedback for these packets */
+  session_harness_produce_rtcp (h, 1);
+  for (i = 0; i < 2; i++) {
+    gst_buffer_unref (session_harness_pull_twcc_rtcp (h));
+  }
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
 static GstBuffer *
 generate_twcc_feedback_rtcp (guint8 * fci_data, guint16 fci_length)
 {
@@ -3355,7 +3380,6 @@ GST_START_TEST (test_twcc_delta_ts_rounding)
 
 GST_END_TEST;
 
-
 GST_START_TEST (test_twcc_send)
 {
   SessionHarness *h_send = session_harness_new ();
@@ -3446,6 +3470,7 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_double_packets);
   tcase_add_test (tc_chain, test_twcc_duplicate_seqnums);
   tcase_add_test (tc_chain, test_twcc_multiple_markers);
+  tcase_add_test (tc_chain, test_twcc_no_marker_and_gaps);
   tcase_add_test (tc_chain, test_twcc_bad_rtcp);
   tcase_add_test (tc_chain, test_twcc_delta_ts_rounding);
   tcase_add_test (tc_chain, test_twcc_send);

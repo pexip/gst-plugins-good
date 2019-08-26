@@ -573,20 +573,22 @@ rtp_twcc_manager_create_feedback (RTPTWCCManager * twcc)
   g_queue_push_tail (twcc->rtcp_buffers, buf);
 }
 
+/* we have calculated a (very pessimistic) max-packets per RTCP feedback,
+   so this is to make sure we don't exceed that */
 static gboolean
-_can_fit_in_mtu (RTPTWCCManager * twcc, guint16 seqnum)
+_exceeds_max_packets (RTPTWCCManager * twcc, guint16 seqnum)
 {
   RecvPacket *first, *last;
   guint16 packet_count;
 
   if (twcc->recv_packets->len == 0)
-    return TRUE;
+    return FALSE;
 
   /* find the delta betwen first stored packet and this seqnum */
   first = &g_array_index (twcc->recv_packets, RecvPacket, 0);
   packet_count = seqnum - first->seqnum + 1;
   if (packet_count > twcc->max_packets_per_rtcp)
-    return FALSE;
+    return TRUE;
 
   /* then find the delta between last stored packet and this seqnum */
   last =
@@ -594,9 +596,30 @@ _can_fit_in_mtu (RTPTWCCManager * twcc, guint16 seqnum)
       twcc->recv_packets->len - 1);
   packet_count = seqnum - (last->seqnum + 1);
   if (packet_count > twcc->max_packets_per_rtcp)
+    return TRUE;
+
+  return FALSE;
+}
+
+/* in this case we could have lost the packet with the marker bit,
+   so with a large (30) amount of packets, lost packets and still no marker,
+   we send a feedback anyway */
+static gboolean
+_many_packets_some_lost (RTPTWCCManager * twcc, guint16 seqnum)
+{
+  RecvPacket *first;
+  guint16 packet_count;
+  guint received_packets = twcc->recv_packets->len;
+  if (received_packets == 0)
     return FALSE;
 
-  return TRUE;
+  first = &g_array_index (twcc->recv_packets, RecvPacket, 0);
+  packet_count = seqnum - first->seqnum + 1;
+  /* packet-count larger than recevied-packets means we have lost packets */
+  if (packet_count >= 30 && packet_count > received_packets)
+    return TRUE;
+
+  return FALSE;
 }
 
 gboolean
@@ -604,12 +627,13 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 {
   gboolean send_feedback = FALSE;
   RecvPacket packet;
+  guint16 seqnum = pinfo->twcc_seqnum;
 
   /* if this packet would exceed the capacity of our MTU, we create a feedback
      with the current packets, and start over with this one */
-  if (!_can_fit_in_mtu (twcc, pinfo->twcc_seqnum)) {
+  if (_exceeds_max_packets (twcc, seqnum)) {
     GST_INFO ("twcc-seqnum: %u would overflow max packets: %u, create feedback"
-        " with current packets", pinfo->twcc_seqnum,
+        " with current packets", seqnum,
         twcc->max_packets_per_rtcp);
     rtp_twcc_manager_create_feedback (twcc);
     send_feedback = TRUE;
@@ -622,11 +646,11 @@ rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
   /* store the packet for Transport-wide RTCP feedback message */
   recv_packet_init (&packet, pinfo);
   g_array_append_val (twcc->recv_packets, packet);
-  twcc->last_seqnum = pinfo->twcc_seqnum;
+  twcc->last_seqnum = seqnum;
   GST_LOG ("Receive: twcc-seqnum: %u, marker: %d, ts: %" GST_TIME_FORMAT,
-      packet.seqnum, pinfo->marker, GST_TIME_ARGS (pinfo->running_time));
+      seqnum, pinfo->marker, GST_TIME_ARGS (pinfo->running_time));
 
-  if (pinfo->marker) {
+  if (pinfo->marker || _many_packets_some_lost (twcc, seqnum)) {
     rtp_twcc_manager_create_feedback (twcc);
     send_feedback = TRUE;
   }
