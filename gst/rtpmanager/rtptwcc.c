@@ -167,7 +167,7 @@ rtp_twcc_manager_free (RTPTWCCManager * twcc)
   g_array_unref (twcc->recv_packets);
   g_array_unref (twcc->sent_packets);
   g_array_unref (twcc->parsed_packets);
-  g_queue_free (twcc->rtcp_buffers);
+  g_queue_free_full (twcc->rtcp_buffers, (GDestroyNotify)gst_buffer_unref);
   g_free (twcc);
 }
 

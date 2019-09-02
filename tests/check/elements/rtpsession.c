@@ -2629,7 +2629,7 @@ _gst_buffer_get_rtcp_fbtype (GstBuffer * buf)
   if (GST_RTCP_TYPE_RTPFB != gst_rtcp_packet_get_type (&packet))
     goto done;
 
-  return gst_rtcp_packet_fb_get_type (&packet);
+  ret = gst_rtcp_packet_fb_get_type (&packet);
 
 done:
   gst_rtcp_buffer_unmap (&rtcp);
@@ -3375,6 +3375,7 @@ GST_START_TEST (test_twcc_delta_ts_rounding)
     fail_unless_equals_clocktime (twcc_pkt->timestamp, ts);
   }
 
+  gst_event_unref (event);
   session_harness_free (h);
 }
 
