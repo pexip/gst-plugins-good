@@ -74,6 +74,10 @@ struct _GstMultiUDPSink {
   guint          num_v6_all;     /* number IPv6 clients (including duplicates) */
   GList         *clients_to_be_removed;
 
+  /* Send timers */
+  GThread       *control_msg_receiver;
+  gboolean       control_msg_receiver_stop;
+
   /* pre-allocated scrap space for render function */
   GOutputVector    *vecs;
   guint             n_vecs;
