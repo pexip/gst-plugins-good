@@ -27,6 +27,7 @@
 G_BEGIN_DECLS
 
 #include "gstudpnetutils.h"
+#include "gstmultiudpsinktimestamping.h"
 
 #define GST_TYPE_MULTIUDPSINK            (gst_multiudpsink_get_type())
 #define GST_MULTIUDPSINK(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_MULTIUDPSINK,GstMultiUDPSink))
@@ -73,6 +74,9 @@ struct _GstMultiUDPSink {
   guint          num_v6_unique;  /* number IPv6 clients (excluding duplicates) */
   guint          num_v6_all;     /* number IPv6 clients (including duplicates) */
   GList         *clients_to_be_removed;
+
+  /* Send timers */
+  GstMultiUDPSinkTimestamping * timestamping;
 
   /* pre-allocated scrap space for render function */
   GOutputVector    *vecs;

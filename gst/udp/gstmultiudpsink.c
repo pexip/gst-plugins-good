@@ -709,6 +709,7 @@ gst_multiudpsink_send_messages (GstMultiUDPSink * sink, GSocket * socket,
   return GST_FLOW_OK;
 }
 
+
 static GstFlowReturn
 gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
     guint num_buffers, guint8 * mem_nums, guint total_mem_num)
@@ -781,6 +782,8 @@ gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
 
   /* populate first num_buffers messages with output vectors for the buffers */
   for (i = 0, mem = 0; i < num_buffers; ++i) {
+    GSocketControlMessage * control_message = gst_multiudpsink_timestamping_get_control_message_from_buffer(buffers[i]);
+
     size += fill_vectors (&vecs[mem], &map_infos[mem], mem_nums[i], buffers[i]);
     msgs[i].vectors = &vecs[mem];
     msgs[i].num_vectors = mem_nums[i];
@@ -788,6 +791,10 @@ gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
     msgs[i].bytes_sent = 0;
     msgs[i].control_messages = NULL;
     msgs[i].address = clients[0]->addr;
+
+    msgs[i].control_messages = (control_message) ? &control_message : NULL;
+    msgs[i].num_control_messages = (control_message) ? 1 : 0;
+
     mem += mem_nums[i];
   }
 
@@ -1041,6 +1048,13 @@ gst_multiudpsink_set_property (GObject * object, guint prop_id,
         g_object_unref (udpsink->socket_v6);
       udpsink->socket_v6 = g_value_dup_object (value);
       GST_DEBUG_OBJECT (udpsink, "setting socket to %p", udpsink->socket_v6);
+
+      // If socket has TIMESTAMPING sockopt enabled, spin out receiver thread.
+      if (gst_multiudpsink_timestamping_get_socket_enabled (udpsink->socket_v6)) {
+        g_error
+            ("Since pexpapa only uses PROP_SOCKET for setting either IPV4 or IPV6 sockets, we don't support registering timestamping enabled sockets for PROP_SOCKET_V6. Fix!");
+        g_assert (0);           // Assert so we are sure to catch this if it happens! 
+      }
       break;
     case PROP_CLOSE_SOCKET:
       udpsink->close_socket = g_value_get_boolean (value);
@@ -1436,6 +1450,17 @@ gst_multiudpsink_start (GstBaseSink * bsink)
     if (!gst_multiudpsink_configure_client (sink, client))
       return FALSE;
   }
+
+  // If socket has TIMESTAMPING sockopt enabled, spin out receiver thread.
+  if (gst_multiudpsink_timestamping_get_socket_enabled (sink->socket)) {
+    if (sink->timestamping != NULL) {
+      g_clear_object (&sink->timestamping);
+    }
+    sink->timestamping = gst_multiudpsink_timestamping_new (sink);
+    GST_DEBUG_OBJECT (sink,
+        "enabling timestamping receiver for socket %p", sink->socket);
+  }
+
   return TRUE;
 
   /* ERRORS */

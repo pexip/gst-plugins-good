@@ -3,6 +3,7 @@ udp_sources = [
   'gstudpsrc.c',
   'gstudpsink.c',
   'gstmultiudpsink.c',
+  'gstmultiudpsinktimestamping.c',
   'gstdynudpsink.c',
   'gstudpnetutils.c'
 ]
@@ -11,7 +12,7 @@ gstudp = library('gstudp',
   udp_sources,
   c_args : gst_plugins_good_args,
   include_directories : [configinc, libsinc],
-  dependencies : [gst_dep, gstbase_dep, gstnet_dep, gio_dep],
+  dependencies : [gst_dep, gstbase_dep, gstnet_dep, gio_dep, gio_unix_dep],
   install : true,
   install_dir : plugins_install_dir,
 )

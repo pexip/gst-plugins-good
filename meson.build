@@ -315,6 +315,7 @@ cdata.set('HAVE_ZLIB', true)
 glib_deps = [dependency('glib-2.0', version : glib_req, fallback: ['glib', 'libglib_dep']),
              dependency('gobject-2.0', fallback: ['glib', 'libgobject_dep'])]
 gio_dep = dependency('gio-2.0', fallback: ['glib', 'libgio_dep'])
+gio_unix_dep = dependency('gio-unix-2.0', fallback: ['glib', 'libgio_dep'])
 
 gst_plugins_good_args = ['-DHAVE_CONFIG_H']
 configinc = include_directories('.')
