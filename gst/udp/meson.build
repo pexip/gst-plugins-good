@@ -3,6 +3,7 @@ udp_sources = [
   'gstudpsrc.c',
   'gstudpsink.c',
   'gstmultiudpsink.c',
+  'gstmultiudpsinktimestamping.c',
   'gstdynudpsink.c',
   'gstudpnetutils.c'
 ]
