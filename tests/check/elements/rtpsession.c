@@ -1005,7 +1005,8 @@ add_rtcp_sdes_packet (GstBuffer * gstbuf, guint32 ssrc, const char *cname)
 
 
 static void
-on_ssrc_collision_cb (GstElement * rtpsession, guint ssrc, gpointer user_data)
+on_ssrc_collision_cb (G_GNUC_UNUSED GstElement * rtpsession,
+    G_GNUC_UNUSED guint ssrc, gpointer user_data)
 {
   gboolean *had_collision = user_data;
 
