@@ -3,6 +3,7 @@
 #endif
 #include "gstmultiudpsink.h"
 #include "gstmultiudpsinktimestamping.h"
+#include <sys/socket.h>
 
 static gpointer gst_multiudpsink_timestamping_v4_receiver_thread(gpointer data);
 static gpointer gst_multiudpsink_timestamping_v6_receiver_thread(gpointer data);

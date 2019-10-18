@@ -2,7 +2,7 @@ plugin_LTLIBRARIES = libgstudp.la
 
 libgstudp_la_SOURCES = gstudp.c gstudpsrc.c gstudpsink.c gstmultiudpsink.c gstdynudpsink.c gstudpnetutils.c gstmultiudpsinktimestamping.c
 
-libgstudp_la_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(GST_NET_CFLAGS) $(GST_CFLAGS) $(GIO_CFLAGS) $(GIO_UNIX_CFLAGS)
+libgstudp_la_CFLAGS = $(GST_PLUGINS_BASE_CFLAGS) $(GST_BASE_CFLAGS) $(GST_NET_CFLAGS) $(GST_CFLAGS) $(GIO_CFLAGS)
 libgstudp_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 
 noinst_HEADERS = gstudpsink.h gstudpsrc.h gstmultiudpsink.h gstdynudpsink.h gstudpnetutils.h gstmultiudpsinktimestamping.h
