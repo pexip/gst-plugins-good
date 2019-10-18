@@ -72,6 +72,7 @@ static void rtp_source_get_property (GObject * object, guint prop_id,
 static GQuark quark_application_x_rtp_source_stats;
 static GQuark quark_avg_frame_transmission_duration;
 static GQuark quark_bitrate;
+static GQuark quark_bytes_received;
 static GQuark quark_clock_rate;
 static GQuark quark_first_rtp_activity;
 static GQuark quark_have_rb;
