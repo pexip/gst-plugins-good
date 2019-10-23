@@ -27,6 +27,7 @@
 G_BEGIN_DECLS
 
 #include "gstudpnetutils.h"
+#include "gstmultiudpsinktimestamping.h"
 
 #define GST_TYPE_MULTIUDPSINK            (gst_multiudpsink_get_type())
 #define GST_MULTIUDPSINK(obj)            (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_MULTIUDPSINK,GstMultiUDPSink))
@@ -75,8 +76,7 @@ struct _GstMultiUDPSink {
   GList         *clients_to_be_removed;
 
   /* Send timers */
-  GThread       *control_msg_receiver;
-  gboolean       control_msg_receiver_stop;
+  GstMultiUDPSinkTimestamping * timestamping;
 
   /* pre-allocated scrap space for render function */
   GOutputVector    *vecs;

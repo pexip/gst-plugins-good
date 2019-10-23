@@ -1,54 +1,113 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include "gstmultiudpsink.h"
+
 #include "gstmultiudpsinktimestamping.h"
+#include "gstmultiudpsink.h"
+#include <stdio.h>
 #include <sys/socket.h>
-
-static gpointer gst_multiudpsink_timestamping_v4_receiver_thread(gpointer data);
-static gpointer gst_multiudpsink_timestamping_v6_receiver_thread(gpointer data);
-static void gst_multiudpsink_timestamping_reader(GstMultiUDPSink * sink, GSocket * socket);
-static void gst_multiudpsink_timestamping_parser(GstMultiUDPSink * sink, GSocket * socket, GInputMessage * message);
-
-
-static void 
-gst_multiudpsink_timestamping_receiver_start(GstMultiUDPSink * sink){
-  return;
-}
-
-
-static gpointer
-gst_multiudpsink_timestamping_v4_receiver_thread(gpointer data){
-  GError * error = NULL;
-  GstMultiUDPSink * sink = GST_MULTIUDPSINK(data);
-
-  while (sink->control_msg_receiver_stop == FALSE){
-    if (g_socket_condition_timed_wait (sink->used_socket, G_IO_IN, 100000, NULL, &error)){
-      if (g_socket_condition_check(sink->used_socket, G_IO_IN) & G_IO_ERR){
-          gst_multiudpsink_timestamping_reader(sink, sink->used_socket);
-      }
-    }    
-  }
-  return NULL;
-}
-
-static gpointer
-gst_multiudpsink_timestamping_v6_receiver_thread(gpointer data){
-  GError * error = NULL;
-  GstMultiUDPSink * sink = GST_MULTIUDPSINK(data);
-
-  while (sink->control_msg_receiver_stop == FALSE){
-    if (g_socket_condition_timed_wait (sink->used_socket_v6, G_IO_IN, 100000, NULL, &error)){
-      if (g_socket_condition_check(sink->used_socket_v6, G_IO_IN) & G_IO_ERR){
-          gst_multiudpsink_timestamping_reader(sink, sink->used_socket_v6);
-      }
-    }
-  }
-  return NULL;
-}
 
 //Max number of control messages we will read at a time.
 #define CONTROL_MSG_MAX_MESSAGES 16
+#define GST_MULTIUDPSINK_TIMESTAMPING_NAME_MAXLEN 16
+#define GST_MULTIUDPSINK_TIMESTAMPING_NAME_PREFIX "ts_recv"
+
+static void gst_multiudpsink_timestamping_finalize (GObject * object);
+static gpointer gst_multiudpsink_timestamping_receiver_thread(gpointer data);
+static void gst_multiudpsink_timestamping_reader(GstMultiUDPSink * sink, GSocket * socket);
+static void gst_multiudpsink_timestamping_parser(GstMultiUDPSink * sink, GSocket * socket, GInputMessage * message);
+
+#define gst_multiudpsink_timestamping_parent_class parent_class
+G_DEFINE_TYPE (GstMultiUDPSinkTimestamping, gst_multiudpsink_timestamping, G_TYPE_OBJECT);
+
+struct _gst_multiudpsink_timestamping_priv_data {
+  GstMultiUDPSink * sink;
+  GSocket * socket;
+};
+
+static void
+gst_multiudpsink_timestamping_class_init (GstMultiUDPSinkTimestampingClass * klass)
+{
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+  object_class->finalize = gst_multiudpsink_timestamping_finalize;
+  return;
+}
+
+static void
+gst_multiudpsink_timestamping_init (GstMultiUDPSinkTimestamping * self)
+{
+  self->thread = NULL;
+  self->signal_stop = FALSE;
+}
+
+static void
+gst_multiudpsink_timestamping_finalize (GObject * object)
+{
+  GstMultiUDPSinkTimestamping * handle = GST_MULTIUDPSINK_TIMESTAMPING(object);
+  g_assert(handle->thread);
+
+  //Signal thread stop
+  handle->signal_stop = TRUE;
+
+  //Wait for thread to exit
+  g_thread_join(handle->thread);
+  g_thread_unref(handle->thread);
+
+  G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+
+/*
+static void 
+gst_multiudpsink_timestamping_receiver_start(GstMultiUDPSink * sink){
+  gchar thread_name[GST_MULTIUDPSINK_TIMESTAMPING_NAME_MAXLEN+1] = {0};
+  struct _gst_multiudpsink_timestamping_priv_data * priv_data = NULL;
+
+  g_assert(sink);
+  g_assert(sink->control_msg_receiver == NULL);
+  g_assert(sink->used_socket || sink->used_socket_v6);
+
+  priv_data = g_malloc0(sizeof(struct _gst_multiudpsink_timestamping_priv_data));
+  g_assert(priv_data);
+  priv_data->sink = sink;
+  priv_data->socket = (sink->used_socket) ? sink->used_socket : sink->used_socket_v6;  
+  snprintf(thread_name, GST_MULTIUDPSINK_TIMESTAMPING_NAME_MAXLEN, "%s_sd_%d", GST_MULTIUDPSINK_TIMESTAMPING_NAME_PREFIX, g_socket_get_fd(priv_data->socket));
+
+  sink->control_msg_receiver_stop = FALSE;
+  sink->control_msg_receiver = g_thread_new(thread_name, gst_multiudpsink_timestamping_receiver_thread, priv_data);
+}
+*/
+
+/*
+static void 
+gst_multiudpsink_timestamping_receiver_stop(GstMultiUDPSink * sink){
+  g_assert(sink);
+  g_assert(sink->control_msg_receiver != NULL);
+
+  //Signal thread stop
+  sink->control_msg_receiver_stop = TRUE;
+
+  g_thread_join(sink->control_msg_receiver);
+  g_thread_unref(sink->control_msg_receiver);
+  sink->control_msg_receiver = NULL;
+}
+*/
+
+static gpointer
+gst_multiudpsink_timestamping_receiver_thread(gpointer data){
+  GError * error = NULL;
+  struct _gst_multiudpsink_timestamping_priv_data * priv_data = (struct _gst_multiudpsink_timestamping_priv_data *)data;
+  g_assert(priv_data);
+
+  while (priv_data->sink->timestamping->signal_stop == FALSE){
+    if (g_socket_condition_timed_wait (priv_data->socket, G_IO_IN, 100000, NULL, &error)){
+      if (g_socket_condition_check(priv_data->socket, G_IO_IN) & G_IO_ERR){
+          gst_multiudpsink_timestamping_reader(priv_data->sink, priv_data->socket);
+      }
+    }
+  }
+  g_free(data);
+  return NULL;
+}
 
 static void
 gst_multiudpsink_timestamping_reader(GstMultiUDPSink * sink, GSocket * socket){
@@ -92,12 +151,12 @@ gst_multiudpsink_timestamping_reader(GstMultiUDPSink * sink, GSocket * socket){
 
 static void
 gst_multiudpsink_timestamping_parser(GstMultiUDPSink * sink, GSocket * socket, GInputMessage * message){
+  GUnixTimestampingMessageUnified unified = {0};
   if (*message->num_control_messages != 2) {
     g_error("Expected number of control messages returned to be 2, but got %d!\n", *message->num_control_messages);
     return;
   }
 
-  GUnixTimestampingMessageUnified unified = {0};
   if ((g_unix_timestamping_unify_control_message_set(*message->control_messages, &unified)) == -1){
     g_error("Failed to unify control message set!\n");
     return;
@@ -107,3 +166,25 @@ gst_multiudpsink_timestamping_parser(GstMultiUDPSink * sink, GSocket * socket, G
     unified.timestamping_source, g_unix_timestamping_get_timestamping_source_name(unified.timestamping_source), unified.packet_id, unified.timestamping_sec, unified.timestamping_nsec);  
 }
 
+GstMultiUDPSinkTimestamping *
+gst_multiudpsink_timestamping_new(GstMultiUDPSink * sink){
+  gchar thread_name[GST_MULTIUDPSINK_TIMESTAMPING_NAME_MAXLEN+1] = {0};
+  struct _gst_multiudpsink_timestamping_priv_data * priv_data = NULL;
+  GstMultiUDPSinkTimestamping * handle = NULL; 
+
+  g_assert(sink);
+  g_assert(sink->control_msg_receiver == NULL);
+  g_assert(sink->used_socket || sink->used_socket_v6);
+
+  priv_data = g_malloc0(sizeof(struct _gst_multiudpsink_timestamping_priv_data));
+  g_assert(priv_data);
+  priv_data->sink = sink;
+  priv_data->socket = (sink->used_socket) ? sink->used_socket : sink->used_socket_v6;  
+  snprintf(thread_name, GST_MULTIUDPSINK_TIMESTAMPING_NAME_MAXLEN, "%s_sd_%d", GST_MULTIUDPSINK_TIMESTAMPING_NAME_PREFIX, g_socket_get_fd(priv_data->socket));
+
+  handle = g_object_new (GST_TYPE_MULTIUDPSINK_TIMESTAMPING, NULL);
+  g_assert(handle);
+  handle->thread = g_thread_new(thread_name, gst_multiudpsink_timestamping_receiver_thread, priv_data);
+
+  return handle;
+}
