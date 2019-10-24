@@ -188,3 +188,10 @@ gst_multiudpsink_timestamping_new(GstMultiUDPSink * sink){
 
   return handle;
 }
+
+gboolean
+gst_multiudpsink_timestamping_get_socket_enabled(GSocket * gsocket)
+{
+  g_assert(gsocket);
+  return g_unix_timestamping_get_socket_enabled(gsocket);
+}
