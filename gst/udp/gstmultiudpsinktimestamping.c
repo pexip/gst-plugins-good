@@ -162,8 +162,18 @@ gst_multiudpsink_timestamping_parser(GstMultiUDPSink * sink, GSocket * socket, G
     return;
   }
 
-  printf("Type:%u TypeName:%s Source:%u SourceName:%s PacketID: %u TS: %ld.%09ld\n", unified.timestamping_type, g_unix_timestamping_get_timestamping_type_name(unified.timestamping_type),
-    unified.timestamping_source, g_unix_timestamping_get_timestamping_source_name(unified.timestamping_source), unified.packet_id, unified.timestamping_sec, unified.timestamping_nsec);  
+  g_debug("Type:%u TypeName:%s Source:%u SourceName:%s PacketID: %u TS: %ld.%09ld\n", unified.timestamping_type, g_unix_timestamping_get_timestamping_type_name(unified.timestamping_type),
+    unified.timestamping_source, g_unix_timestamping_get_timestamping_source_name(unified.timestamping_source), unified.packet_id, unified.timestamping_sec, unified.timestamping_nsec); 
+
+  GstClockTime ts = (((GstClockTime)unified.timestamping_sec * GST_SECOND) + unified.timestamping_nsec);
+  GstStructure * st = gst_structure_new("GstMultiUDPTimestamping",
+    "type", G_TYPE_UINT, unified.timestamping_type,
+    "source", G_TYPE_UINT, unified.timestamping_source,
+    "packetid", G_TYPE_UINT, unified.packet_id,
+    "timestamp", GST_TYPE_CLOCK_TIME, ts,
+    NULL );
+  GstEvent * ev = gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, st);
+  g_assert(gst_pad_send_event(sink, ev) == TRUE);
 }
 
 GstMultiUDPSinkTimestamping *
