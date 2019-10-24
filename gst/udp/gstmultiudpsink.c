@@ -1026,6 +1026,15 @@ gst_multiudpsink_set_property (GObject * object, guint prop_id,
         g_object_unref (udpsink->socket);
       udpsink->socket = g_value_dup_object (value);
       GST_DEBUG_OBJECT (udpsink, "setting socket to %p", udpsink->socket);
+
+      // If socket has TIMESTAMPING sockopt enabled, spin out receiver thread.
+      if (gst_multiudpsink_timestamping_get_socket_enabled(udpsink->socket)){
+        if (udpsink->timestamping != NULL){
+          g_clear_object(&udpsink->timestamping);
+        }
+        udpsink->timestamping = gst_multiudpsink_timestamping_new(udpsink);
+        GST_DEBUG_OBJECT (udpsink, "enabling timestamping receiver for socket %p", udpsink->socket);
+      }
       break;
     case PROP_SOCKET_V6:
       if (udpsink->socket_v6 != NULL
@@ -1043,6 +1052,12 @@ gst_multiudpsink_set_property (GObject * object, guint prop_id,
         g_object_unref (udpsink->socket_v6);
       udpsink->socket_v6 = g_value_dup_object (value);
       GST_DEBUG_OBJECT (udpsink, "setting socket to %p", udpsink->socket_v6);
+
+      // If socket has TIMESTAMPING sockopt enabled, spin out receiver thread.
+      if (gst_multiudpsink_timestamping_get_socket_enabled(udpsink->socket_v6)){
+        g_error("Since pexpapa only uses PROP_SOCKET for setting either IPV4 or IPV6 sockets, we don't support registering timestamping enabled sockets for PROP_SOCKET_V6. Fix!");
+        g_assert(0); // Assert so we are sure to catch this if it happens! 
+      }
       break;
     case PROP_CLOSE_SOCKET:
       udpsink->close_socket = g_value_get_boolean (value);
