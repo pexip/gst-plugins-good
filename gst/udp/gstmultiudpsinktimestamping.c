@@ -37,7 +37,7 @@ static void
 gst_multiudpsink_timestamping_init (GstMultiUDPSinkTimestamping * self)
 {
   self->thread = NULL;
-  self->signal_stop = FALSE;
+  self->shutdown = g_cancellable_new();
 }
 
 static void
@@ -45,52 +45,18 @@ gst_multiudpsink_timestamping_finalize (GObject * object)
 {
   GstMultiUDPSinkTimestamping * handle = GST_MULTIUDPSINK_TIMESTAMPING(object);
   g_assert(handle->thread);
+  g_assert(handle->shutdown);
 
   //Signal thread stop
-  handle->signal_stop = TRUE;
+  g_cancellable_cancel(handle->shutdown);
 
   //Wait for thread to exit
   g_thread_join(handle->thread);
   g_thread_unref(handle->thread);
+  g_object_unref(handle->shutdown);
 
-  G_OBJECT_CLASS (parent_class)->finalize (object);
+  G_OBJECT_CLASS(parent_class)->finalize(object);
 }
-
-/*
-static void 
-gst_multiudpsink_timestamping_receiver_start(GstMultiUDPSink * sink){
-  gchar thread_name[GST_MULTIUDPSINK_TIMESTAMPING_NAME_MAXLEN+1] = {0};
-  struct _gst_multiudpsink_timestamping_priv_data * priv_data = NULL;
-
-  g_assert(sink);
-  g_assert(sink->control_msg_receiver == NULL);
-  g_assert(sink->used_socket || sink->used_socket_v6);
-
-  priv_data = g_malloc0(sizeof(struct _gst_multiudpsink_timestamping_priv_data));
-  g_assert(priv_data);
-  priv_data->sink = sink;
-  priv_data->socket = (sink->used_socket) ? sink->used_socket : sink->used_socket_v6;  
-  snprintf(thread_name, GST_MULTIUDPSINK_TIMESTAMPING_NAME_MAXLEN, "%s_sd_%d", GST_MULTIUDPSINK_TIMESTAMPING_NAME_PREFIX, g_socket_get_fd(priv_data->socket));
-
-  sink->control_msg_receiver_stop = FALSE;
-  sink->control_msg_receiver = g_thread_new(thread_name, gst_multiudpsink_timestamping_receiver_thread, priv_data);
-}
-*/
-
-/*
-static void 
-gst_multiudpsink_timestamping_receiver_stop(GstMultiUDPSink * sink){
-  g_assert(sink);
-  g_assert(sink->control_msg_receiver != NULL);
-
-  //Signal thread stop
-  sink->control_msg_receiver_stop = TRUE;
-
-  g_thread_join(sink->control_msg_receiver);
-  g_thread_unref(sink->control_msg_receiver);
-  sink->control_msg_receiver = NULL;
-}
-*/
 
 static gpointer
 gst_multiudpsink_timestamping_receiver_thread(gpointer data){
@@ -98,9 +64,9 @@ gst_multiudpsink_timestamping_receiver_thread(gpointer data){
   struct _gst_multiudpsink_timestamping_priv_data * priv_data = (struct _gst_multiudpsink_timestamping_priv_data *)data;
   g_assert(priv_data);
 
-  while (priv_data->sink->timestamping->signal_stop == FALSE){
-    if (g_socket_condition_timed_wait (priv_data->socket, G_IO_IN, 100000, NULL, &error)){
-      if (g_socket_condition_check(priv_data->socket, G_IO_IN) & G_IO_ERR){
+  while (g_cancellable_is_cancelled(priv_data->sink->timestamping->shutdown) == FALSE){
+    if (g_socket_condition_wait (priv_data->socket, G_IO_ERR, priv_data->sink->timestamping->shutdown, &error)){
+      if (g_socket_condition_check(priv_data->socket, G_IO_ERR) & G_IO_ERR){
           gst_multiudpsink_timestamping_reader(priv_data->sink, priv_data->socket);
       }
     }

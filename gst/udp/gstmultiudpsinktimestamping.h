@@ -28,7 +28,7 @@ struct _GstMultiUDPSinkTimestampingClass {
 
 struct _GstMultiUDPSinkTimestamping {	
   GThread       *thread;
-  gboolean       signal_stop;
+  GCancellable  *shutdown;
 };
 
 
