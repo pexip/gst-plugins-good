@@ -705,6 +705,7 @@ gst_multiudpsink_send_messages (GstMultiUDPSink * sink, GSocket * socket,
   return GST_FLOW_OK;
 }
 
+
 static GstFlowReturn
 gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
     guint num_buffers, guint8 * mem_nums, guint total_mem_num)
@@ -777,7 +778,8 @@ gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
 
   /* populate first num_buffers messages with output vectors for the buffers */
   for (i = 0, mem = 0; i < num_buffers; ++i) {
-    GstNetControlMessageMeta *meta = gst_buffer_get_net_control_message_meta (buffers[i]);
+
+    GSocketControlMessage * control_message = gst_multiudpsink_timestamping_get_control_message_from_buffer(buffers[i]);
 
     size += fill_vectors (&vecs[mem], &map_infos[mem], mem_nums[i], buffers[i]);
     msgs[i].vectors = &vecs[mem];
@@ -787,8 +789,8 @@ gst_multiudpsink_render_buffers (GstMultiUDPSink * sink, GstBuffer ** buffers,
     msgs[i].control_messages = NULL;
     msgs[i].address = clients[0]->addr;
 
-    msgs[i].control_messages = (meta) ? meta->message : NULL;
-    msgs[i].num_control_messages = (meta && meta->message) ? 1 : 0;
+    msgs[i].control_messages = control_message;
+    msgs[i].num_control_messages = (control_message) ? 1 : 0;
 
     mem += mem_nums[i];
   }

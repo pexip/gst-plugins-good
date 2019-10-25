@@ -34,6 +34,8 @@ struct _GstMultiUDPSinkTimestamping {
 
 GLIB_AVAILABLE_IN_ALL GstMultiUDPSinkTimestamping * gst_multiudpsink_timestamping_new (GstMultiUDPSink * sink);
 GLIB_AVAILABLE_IN_ALL gboolean gst_multiudpsink_timestamping_get_socket_enabled(GSocket *);
+GLIB_AVAILABLE_IN_ALL GSocketControlMessage * gst_multiudpsink_timestamping_get_control_message_from_buffer(GstBuffer * buf);
+
 GType gst_multiudpsink_timestamping_get_type (void);
 
 G_END_DECLS

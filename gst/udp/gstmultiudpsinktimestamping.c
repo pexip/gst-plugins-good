@@ -6,6 +6,7 @@
 #include "gstmultiudpsink.h"
 #include <stdio.h>
 #include <sys/socket.h>
+#include <gst/net/gstnetcontrolmessagemeta.h>
 
 //Max number of control messages we will read at a time.
 #define CONTROL_MSG_MAX_MESSAGES 16
@@ -118,6 +119,9 @@ gst_multiudpsink_timestamping_reader(GstMultiUDPSink * sink, GSocket * socket){
 static void
 gst_multiudpsink_timestamping_parser(GstMultiUDPSink * sink, GSocket * socket, GInputMessage * message){
   GUnixTimestampingMessageUnified unified = {0};
+  GstClockTime ts = {0};
+  GstStructure * st = NULL;
+  GstEvent * ev = NULL;
   if (*message->num_control_messages != 2) {
     g_error("Expected number of control messages returned to be 2, but got %d!\n", *message->num_control_messages);
     return;
@@ -131,15 +135,15 @@ gst_multiudpsink_timestamping_parser(GstMultiUDPSink * sink, GSocket * socket, G
   g_debug("Type:%u TypeName:%s Source:%u SourceName:%s PacketID: %u TS: %ld.%09ld\n", unified.timestamping_type, g_unix_timestamping_get_timestamping_type_name(unified.timestamping_type),
     unified.timestamping_source, g_unix_timestamping_get_timestamping_source_name(unified.timestamping_source), unified.packet_id, unified.timestamping_sec, unified.timestamping_nsec); 
 
-  GstClockTime ts = (((GstClockTime)unified.timestamping_sec * GST_SECOND) + unified.timestamping_nsec);
-  GstStructure * st = gst_structure_new("GstMultiUDPTimestamping",
+  ts = (((GstClockTime)unified.timestamping_sec * GST_SECOND) + unified.timestamping_nsec);
+  st = gst_structure_new("GstMultiUDPTimestamping",
     "type", G_TYPE_UINT, unified.timestamping_type,
     "source", G_TYPE_UINT, unified.timestamping_source,
     "packetid", G_TYPE_UINT, unified.packet_id,
     "timestamp", GST_TYPE_CLOCK_TIME, ts,
     NULL );
-  GstEvent * ev = gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, st);
-  g_assert(gst_pad_send_event(sink, ev) == TRUE);
+  ev = gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM, st);
+  gst_pad_send_event(sink, ev);
 }
 
 GstMultiUDPSinkTimestamping *
@@ -170,4 +174,19 @@ gst_multiudpsink_timestamping_get_socket_enabled(GSocket * gsocket)
 {
   g_assert(gsocket);
   return g_unix_timestamping_get_socket_enabled(gsocket);
+}
+
+GSocketControlMessage *
+gst_multiudpsink_timestamping_get_control_message_from_buffer(GstBuffer * buf)
+{
+  GstMeta *meta;
+  gpointer iter_state = NULL;
+
+  while ((meta = gst_buffer_iterate_meta (buf, &iter_state)) != NULL) {
+    if (meta->info->api == GST_NET_CONTROL_MESSAGE_META_API_TYPE){
+      g_debug("Received GSocketControlMessage attached to buffer");
+      return ((GstNetControlMessageMeta *) meta)->message;
+    }
+  }
+  return NULL;
 }
