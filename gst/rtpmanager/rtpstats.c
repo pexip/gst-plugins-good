@@ -499,7 +499,12 @@ _calculate_deltas (RTPTWCCStats * stats, GArray * twcc_packets)
     if (GST_CLOCK_STIME_IS_VALID (pkt->local_delta) &&
         GST_CLOCK_STIME_IS_VALID (pkt->remote_delta)) {
       pkt->delta_delta = pkt->remote_delta - pkt->local_delta;
-    }
+
+     if (stats->fd) {
+       fprintf (stats->fd, "%"G_GINT64_FORMAT"\t%"G_GINT64_FORMAT"\t%"G_GINT64_FORMAT"\n", pkt->delta_delta, pkt->local_delta, pkt->remote_delta);
+       fflush (stats->fd);
+     }
+   }
 
     stats->last_local_ts = pkt->local_ts;
     stats->last_remote_ts = pkt->remote_ts;
@@ -601,6 +606,9 @@ _process_stats (RTPTWCCStats * stats)
       stats->avg_delta_of_delta_change);
 }
 
+
+
+
 RTPTWCCStats *
 rtp_twcc_stats_new (void)
 {
@@ -609,12 +617,20 @@ rtp_twcc_stats_new (void)
   stats->last_local_ts = GST_CLOCK_TIME_NONE;
   stats->last_remote_ts = GST_CLOCK_TIME_NONE;
   stats->avg_delta_of_delta = GST_CLOCK_STIME_NONE;
+
+  {
+    gchar *filename = g_strdup_printf ("/share/twcc-%p.txt", stats);
+    stats->fd = fopen (filename, "w");
+  }
+
   return stats;
 }
 
 void
 rtp_twcc_stats_free (RTPTWCCStats * stats)
 {
+  if (stats->fd)
+    fclose (stats->fd);
   g_array_unref (stats->packets);
   g_free (stats);
 }

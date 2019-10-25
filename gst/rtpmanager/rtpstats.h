@@ -26,6 +26,7 @@
 #include <gst/net/gstnetaddressmeta.h>
 #include <gst/rtp/rtp.h>
 #include <gio/gio.h>
+#include <stdio.h>
 
 /* UDP/IP is assumed for bandwidth calculation */
 #define UDP_IP_HEADER_OVERHEAD 28
@@ -273,6 +274,7 @@ typedef struct {
   gfloat packet_loss_pct;
   GstClockTimeDiff avg_delta_of_delta;
   gfloat avg_delta_of_delta_change;
+  FILE *fd;
 } RTPTWCCStats;
 
 
