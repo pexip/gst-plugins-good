@@ -3117,6 +3117,21 @@ rtp_session_process_twcc (RTPSession * sess, guint32 sender_ssrc,
   RTP_SESSION_LOCK (sess);
 }
 
+void
+rtp_session_ts_msg (RTPSession * sess, const GstStructure * s)
+{
+  guint packet_id;
+  GstClockTime ts;
+
+  gst_structure_get (s,
+      "packetid", G_TYPE_UINT, &packet_id,
+      "timestamp", GST_TYPE_CLOCK_TIME, &ts,
+      NULL);
+
+  rtp_twcc_manager_set_send_packet_ts (sess->twcc, packet_id, ts);
+}
+
+
 static void
 rtp_session_process_feedback (RTPSession * sess, GstRTCPPacket * packet,
     RTPPacketInfo * pinfo, GstClockTime current_time)

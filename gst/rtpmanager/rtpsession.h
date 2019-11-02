@@ -451,5 +451,7 @@ gboolean        rtp_session_request_nack           (RTPSession * sess,
                                                     guint16 seqnum,
                                                     GstClockTime max_delay);
 
+void            rtp_session_ts_msg (RTPSession * sess, const GstStructure * s);
+
 
 #endif /* __RTP_SESSION_H__ */

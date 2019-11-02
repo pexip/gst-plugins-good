@@ -20,6 +20,11 @@
 #include "rtptwcc.h"
 #include <gst/rtp/gstrtcpbuffer.h>
 
+#ifdef G_OS_UNIX
+#  include <gio/gunixtimestampingmessage.h>
+#endif
+#include <gst/net/gstnetcontrolmessagemeta.h>
+
 GST_DEBUG_CATEGORY_EXTERN (rtp_session_debug);
 #define GST_CAT_DEFAULT rtp_session_debug
 
@@ -706,10 +711,17 @@ rtp_twcc_manager_send_packet (RTPTWCCManager * twcc,
   pinfo->data = gst_buffer_make_writable (pinfo->data);
   gst_rtp_buffer_map (pinfo->data, GST_MAP_READWRITE, &rtp);
 
+#ifdef G_OS_UNIX
+  {
+    GSocketControlMessage *tsmsg = g_unix_timestamping_message_new_with_mask (TIMESTAMPING_MASK_SEND_SOFTWARE);
+    gst_buffer_add_net_control_message_meta (rtp.buffer, tsmsg);
+  }
+#endif
+
   GST_WRITE_UINT16_BE (&data, pinfo->twcc_seqnum);
   gst_rtp_buffer_add_extension_onebyte_header (&rtp, ext_id, &data, 2);
 
-  GST_LOG ("Send: twcc-seqnum: %u, marker: %d, ts: %" GST_TIME_FORMAT,
+  GST_DEBUG ("Send: twcc-seqnum: %u, marker: %d, ts: %" GST_TIME_FORMAT,
       pinfo->twcc_seqnum, pinfo->marker, GST_TIME_ARGS (pinfo->running_time));
 
   gst_rtp_buffer_unmap (&rtp);
@@ -883,6 +895,7 @@ rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
           pkt->local_ts = found->socket_ts;
         } else {
           pkt->local_ts = found->ts;
+          GST_ERROR ("NOOOOOOOOOO!!!!");
         }
         pkt->size = found->size;
 

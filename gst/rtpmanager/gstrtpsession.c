@@ -2184,13 +2184,21 @@ gst_rtp_session_event_send_rtcp_src (GstPad * pad, GstObject * parent,
     GstEvent * event)
 {
   GstRtpSession *rtpsession;
+  GstRtpSessionPrivate *priv;
   gboolean ret = TRUE;
+  const GstStructure *s;
 
   rtpsession = GST_RTP_SESSION (parent);
-  GST_DEBUG_OBJECT (rtpsession, "received EVENT %s",
-      GST_EVENT_TYPE_NAME (event));
+  priv = rtpsession->priv;
+  GST_DEBUG_OBJECT (rtpsession, "received EVENT %" GST_PTR_FORMAT, event);
 
   switch (GST_EVENT_TYPE (event)) {
+    case GST_EVENT_CUSTOM_UPSTREAM:
+      s = gst_event_get_structure (event);
+      if (gst_structure_has_name (s, "GstMultiUDPTimestamping")) {
+        rtp_session_ts_msg (priv->session, s);
+      }
+    break;
     case GST_EVENT_SEEK:
     case GST_EVENT_LATENCY:
       gst_event_unref (event);
@@ -2205,7 +2213,6 @@ gst_rtp_session_event_send_rtcp_src (GstPad * pad, GstObject * parent,
 
   return ret;
 }
-
 
 static gboolean
 gst_rtp_session_event_send_rtp_sink (GstPad * pad, GstObject * parent,
