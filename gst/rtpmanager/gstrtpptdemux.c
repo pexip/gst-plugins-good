@@ -500,6 +500,12 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
     gst_pad_set_active (srcpad, TRUE);
 
+    gst_element_add_pad (GST_ELEMENT_CAST (rtpdemux), srcpad);
+
+    GST_DEBUG_OBJECT (rtpdemux, "emitting new-payload-type for pt %d", pt);
+    g_signal_emit (G_OBJECT (rtpdemux),
+        gst_rtp_pt_demux_signals[SIGNAL_NEW_PAYLOAD_TYPE], 0, pt, srcpad);
+
     /* First push the stream-start event, it must always come first */
     gst_pad_push_event (srcpad,
         gst_pad_get_sticky_event (rtpdemux->sink, GST_EVENT_STREAM_START, 0));
@@ -511,12 +517,6 @@ gst_rtp_pt_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     /* First sticky events on sink pad are forwarded to the new src pad */
     gst_pad_sticky_events_foreach (rtpdemux->sink, forward_sticky_events,
         srcpad);
-
-    gst_element_add_pad (GST_ELEMENT_CAST (rtpdemux), srcpad);
-
-    GST_DEBUG_OBJECT (rtpdemux, "emitting new-payload-type for pt %d", pt);
-    g_signal_emit (G_OBJECT (rtpdemux),
-        gst_rtp_pt_demux_signals[SIGNAL_NEW_PAYLOAD_TYPE], 0, pt, srcpad);
   }
 
   if (pt != rtpdemux->last_pt) {

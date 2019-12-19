@@ -3364,7 +3364,6 @@ expose_recv_src_pad (GstRtpBin * rtpbin, GstPad * pad, GstRtpBinStream * stream,
   gst_pad_set_active (gpad, TRUE);
   GST_RTP_BIN_SHUTDOWN_UNLOCK (rtpbin);
 
-  gst_pad_sticky_events_foreach (pad, copy_sticky_events, gpad);
   gst_element_add_pad (GST_ELEMENT_CAST (rtpbin), gpad);
 
 done:
