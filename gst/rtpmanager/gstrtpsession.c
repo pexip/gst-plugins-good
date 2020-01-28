@@ -1569,6 +1569,38 @@ stopping:
   }
 }
 
+static guint8
+_get_extmap_id_for_attribute (const GstStructure * s, const gchar * ext_name)
+{
+  guint i;
+  guint8 extmap_id = 0;
+  guint n_fields = gst_structure_n_fields (s);
+
+  for (i = 0; i < n_fields; i++) {
+    const gchar *field_name = gst_structure_nth_field_name (s, i);
+    if (g_str_has_prefix (field_name, "extmap-")) {
+      const gchar *str = gst_structure_get_string (s, field_name);
+      if (str && g_strcmp0 (str, ext_name) == 0) {
+        gint64 id = g_ascii_strtoll (field_name + 7, NULL, 10);
+        if (id > 0 && id < 15) {
+          extmap_id = id;
+          break;
+        }
+      }
+    }
+  }
+  return extmap_id;
+}
+
+static void
+gst_rtp_session_set_twcc_recv_extmap_id (GstRtpSession * rtpsession,
+    const GstStructure * s)
+{
+  guint8 ext_id = _get_extmap_id_for_attribute (s,
+      "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
+  rtp_session_set_twcc_recv_ext_id (rtpsession->priv->session, ext_id);
+}
+
 static void
 gst_rtp_session_cache_caps (GstRtpSession * rtpsession, GstCaps * caps)
 {
@@ -1583,6 +1615,8 @@ gst_rtp_session_cache_caps (GstRtpSession * rtpsession, GstCaps * caps)
   s = gst_caps_get_structure (caps, 0);
   if (!gst_structure_get_int (s, "payload", &payload))
     return;
+
+  gst_rtp_session_set_twcc_recv_extmap_id (rtpsession, s);
 
   if (g_hash_table_lookup (priv->ptmap, GINT_TO_POINTER (payload)))
     return;

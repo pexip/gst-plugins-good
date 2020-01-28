@@ -2159,13 +2159,10 @@ update_packet (GstBuffer ** buffer, guint idx, RTPPacketInfo * pinfo)
       for (i = 0; i < pinfo->csrc_count; i++)
         pinfo->csrcs[i] = gst_rtp_buffer_get_csrc (&rtp, i);
 
-      /* Transport-wide sequence number */
-      if (pinfo->twcc_ext_id > 0 && !pinfo->send) {
-        gpointer data;
-        if (gst_rtp_buffer_get_extension_onebyte_header (&rtp,
-                pinfo->twcc_ext_id, 0, &data, NULL)) {
-          pinfo->twcc_seqnum = GST_READ_UINT16_BE (data);
-        }
+      /* RTP header extension */
+      if (!pinfo->send) {
+        pinfo->header_ext = gst_rtp_buffer_get_extension_bytes (&rtp,
+            &pinfo->header_ext_bit_pattern);
       }
     }
     gst_rtp_buffer_unmap (&rtp);
@@ -2216,11 +2213,7 @@ update_packet_info (RTPSession * sess, RTPPacketInfo * pinfo,
   pinfo->payload_len = 0;
   pinfo->packets = 0;
   pinfo->marker = FALSE;
-
-  if (!send) {
-    pinfo->twcc_seqnum = -1;
-    pinfo->twcc_ext_id = sess->twcc_recv_ext_id;
-  }
+  pinfo->twcc_seqnum = -1;
 
   if (is_list) {
     GstBufferList *list = GST_BUFFER_LIST_CAST (data);
@@ -2244,6 +2237,8 @@ clean_packet_info (RTPPacketInfo * pinfo)
     gst_mini_object_unref (pinfo->data);
     pinfo->data = NULL;
   }
+  if (pinfo->header_ext)
+    g_bytes_unref (pinfo->header_ext);
 }
 
 static gboolean
@@ -2268,9 +2263,28 @@ source_update_active (RTPSession * sess, RTPSource * source,
   return TRUE;
 }
 
+static gint32
+packet_info_get_twcc_seqnum (RTPPacketInfo * pinfo, guint8 ext_id)
+{
+  gint32 val = -1;
+  gpointer data;
+
+  if (gst_rtp_buffer_get_extension_onebyte_header_from_bytes (pinfo->header_ext,
+          pinfo->header_ext_bit_pattern, ext_id, 0, &data, NULL)) {
+    val = GST_READ_UINT16_BE (data);
+  }
+  return val;
+}
+
 static void
 process_twcc_packet (RTPSession * sess, RTPPacketInfo * pinfo)
 {
+  if (sess->twcc_recv_ext_id == 0)
+    return;
+
+  pinfo->twcc_seqnum = packet_info_get_twcc_seqnum (pinfo,
+      sess->twcc_recv_ext_id);
+
   if (pinfo->twcc_seqnum == -1)
     return;
 
@@ -3350,7 +3364,7 @@ invalid_packet:
 collision:
   {
     g_object_unref (source);
-    gst_mini_object_unref (GST_MINI_OBJECT_CAST (data));
+    clean_packet_info (&pinfo);
     RTP_SESSION_UNLOCK (sess);
     GST_WARNING ("non-internal source with same ssrc %08x, drop packet",
         pinfo.ssrc);
@@ -4936,4 +4950,18 @@ no_source:
     RTP_SESSION_UNLOCK (sess);
     return FALSE;
   }
+}
+
+/**
+ * rtp_session_set_twcc_recv_ext_id:
+ * @sess: a #RTPSession
+ * @ext_id: the extension ID
+ *
+ * Set the ext_id we should be sending TWCC feedback packets for.
+ * Setting 0 disables it, as 0 is not a valid extension ID
+ */
+void
+rtp_session_set_twcc_recv_ext_id (RTPSession * sess, guint8 ext_id)
+{
+  sess->twcc_recv_ext_id = ext_id;
 }

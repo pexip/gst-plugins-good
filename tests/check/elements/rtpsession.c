@@ -327,6 +327,18 @@ session_harness_rtp_retransmission_request (SessionHarness * h,
       gst_event_new_custom (GST_EVENT_CUSTOM_UPSTREAM, s));
 }
 
+static void
+session_harness_set_twcc_recv_ext_id (SessionHarness * h, guint8 ext_id)
+{
+  gchar *name = g_strdup_printf ("extmap-%u", ext_id);
+  gst_caps_set_simple (h->caps, name, G_TYPE_STRING,
+      "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01",
+      NULL);
+  g_signal_emit_by_name (h->session, "clear-pt-map");
+  g_free (name);
+}
+
+
 GST_START_TEST (test_multiple_ssrc_rr)
 {
   SessionHarness *h = session_harness_new ();
@@ -2530,8 +2542,7 @@ GST_START_TEST (test_twcc_header_and_run_length)
   TWCCTestData *td = &twcc_header_and_run_lenght_test_data[__i__];
 
   /* enable twcc */
-  g_object_set (h->internal_session,
-      "twcc-recv-ext-id", TEST_TWCC_EXT_ID, NULL);
+  session_harness_set_twcc_recv_ext_id (h, TEST_TWCC_EXT_ID);
 
   /* receive some buffers */
   for (i = 0; i < td->num_packets; i++) {
@@ -2600,8 +2611,7 @@ typedef struct
 #define twcc_push_packets(h, packets)                                          \
 G_STMT_START {                                                                 \
   guint i;                                                                     \
-  g_object_set (h->internal_session,                                           \
-      "twcc-recv-ext-id", TEST_TWCC_EXT_ID, NULL);                             \
+  session_harness_set_twcc_recv_ext_id ((h), TEST_TWCC_EXT_ID);                \
   for (i = 0; i < G_N_ELEMENTS ((packets)); i++) {                             \
     TWCCPacket *twcc_pkt = &(packets)[i];                                      \
     fail_unless_equals_int (GST_FLOW_OK,                                       \
@@ -3444,14 +3454,12 @@ GST_START_TEST (test_twcc_send_and_recv)
   const guint num_frames = 2;
   const guint num_slices = 15;
 
+  /* enable twcc */
   GstStructure *twcc_send_map = gst_structure_new ("map",
       G_STRINGIFY (TEST_BUF_PT), G_TYPE_UINT, TEST_TWCC_EXT_ID, NULL);
-
-  /* enable twcc */
   g_object_set (h_send->internal_session,
       "twcc-send-ext-map", twcc_send_map, NULL);
-  g_object_set (h_recv->internal_session,
-      "twcc-recv-ext-id", TEST_TWCC_EXT_ID, NULL);
+  session_harness_set_twcc_recv_ext_id (h_recv, TEST_TWCC_EXT_ID);
   gst_structure_free (twcc_send_map);
 
   for (frame = 0; frame < num_frames; frame++) {

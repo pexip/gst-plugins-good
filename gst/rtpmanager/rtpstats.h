@@ -104,8 +104,9 @@ typedef struct {
   gboolean      marker;
   guint32       csrc_count;
   guint32       csrcs[16];
-  guint8        twcc_ext_id;
   gint32        twcc_seqnum;
+  GBytes        *header_ext;
+  guint16       header_ext_bit_pattern;
 } RTPPacketInfo;
 
 /**

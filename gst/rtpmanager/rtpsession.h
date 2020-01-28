@@ -438,5 +438,8 @@ gboolean        rtp_session_request_nack           (RTPSession * sess,
                                                     guint16 seqnum,
                                                     GstClockTime max_delay);
 
+/* set the TWCC extension ID to send feedback-packets for */
+void            rtp_session_set_twcc_recv_ext_id   (RTPSession * sess, guint8 ext_id);
+
 
 #endif /* __RTP_SESSION_H__ */
