@@ -104,7 +104,6 @@ enum
   PROP_RTP_PROFILE,
   PROP_RTCP_REDUCED_SIZE,
   PROP_RTCP_DISABLE_SR_TIMESTAMP,
-  PROP_TWCC_RECV_EXT_ID,
   PROP_TWCC_SEND_EXT_MAP,
 };
 
@@ -627,22 +626,6 @@ rtp_session_class_init (RTPSessionClass * klass)
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
-   * RTPSession::twcc-recv-ext-id:
-   *
-   * The RTP header-extension ID used for receving Transport-wide Congestion
-   * Control sequence-numbers, and sending a RTCP-packet back, acknowledging
-   * the received packets.
-   *
-   * Since: 1.18
-   */
-  g_object_class_install_property (gobject_class, PROP_TWCC_RECV_EXT_ID,
-      g_param_spec_uint ("twcc-recv-ext-id",
-          "Receiving Transport-wide Congestion Control Extension ID",
-          "The RTP header-extension ID to use for Transport-wide "
-          "Congestion Control sequencenumbers (0 = disable)", 0, 15, 0,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-
-  /**
    * RTPSession::twcc-send-ext-map:
    *
    * The RTP header-extension ID used for sending Transport-wide Congestion
@@ -955,9 +938,6 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       sess->timestamp_sender_reports = !g_value_get_boolean (value);
       break;
-    case PROP_TWCC_RECV_EXT_ID:
-      sess->twcc_recv_ext_id = g_value_get_uint (value);
-      break;
     case PROP_TWCC_SEND_EXT_MAP:
       RTP_SESSION_LOCK (sess);
       if (sess->twcc_send_ext_map_structure)
@@ -1049,9 +1029,6 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       g_value_set_boolean (value, !sess->timestamp_sender_reports);
-      break;
-    case PROP_TWCC_RECV_EXT_ID:
-      g_value_set_uint (value, sess->twcc_recv_ext_id);
       break;
     case PROP_TWCC_SEND_EXT_MAP:
       RTP_SESSION_LOCK (sess);
