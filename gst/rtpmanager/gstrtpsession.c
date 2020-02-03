@@ -1639,7 +1639,8 @@ gst_rtp_session_set_twcc_recv_extmap_id (GstRtpSession * rtpsession,
 {
   guint8 ext_id = _get_extmap_id_for_attribute (s,
       "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01");
-  rtp_session_set_twcc_recv_ext_id (rtpsession->priv->session, ext_id);
+  if (ext_id > 0)
+    rtp_session_set_twcc_recv_ext_id (rtpsession->priv->session, ext_id);
 }
 
 static void
