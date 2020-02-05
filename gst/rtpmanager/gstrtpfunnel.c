@@ -29,6 +29,8 @@
 GST_DEBUG_CATEGORY_STATIC (gst_rtp_funnel_debug);
 #define GST_CAT_DEFAULT gst_rtp_funnel_debug
 
+/**************** GstRTPFunnelPad ****************/
+
 struct _GstRtpFunnelPadClass
 {
   GstPadClass class;
@@ -40,6 +42,20 @@ struct _GstRtpFunnelPad
   guint32 ssrc;
 };
 
+G_DEFINE_TYPE (GstRtpFunnelPad, gst_rtp_funnel_pad, GST_TYPE_PAD);
+
+static void
+gst_rtp_funnel_pad_class_init (G_GNUC_UNUSED GstRtpFunnelPadClass * klass)
+{
+}
+
+static void
+gst_rtp_funnel_pad_init (G_GNUC_UNUSED GstRtpFunnelPad * pad)
+{
+}
+
+/**************** GstRTPFunnel ****************/
+
 enum
 {
   PROP_0,
@@ -47,20 +63,6 @@ enum
 };
 
 #define DEFAULT_COMMON_TS_OFFSET -1
-
-G_DEFINE_TYPE (GstRtpFunnelPad, gst_rtp_funnel_pad, GST_TYPE_PAD);
-
-static void
-gst_rtp_funnel_pad_class_init (GstRtpFunnelPadClass * klass)
-{
-  (void) klass;
-}
-
-static void
-gst_rtp_funnel_pad_init (GstRtpFunnelPad * pad)
-{
-  (void) pad;
-}
 
 struct _GstRtpFunnelClass
 {
@@ -102,7 +104,7 @@ static void
 gst_rtp_funnel_send_sticky (GstRtpFunnel * funnel, GstPad * pad)
 {
   GstEvent *stream_start;
-  GstEvent *caps;
+  GstEvent *caps_ev;
 
   if (!funnel->send_sticky_events)
     goto done;
@@ -113,8 +115,8 @@ gst_rtp_funnel_send_sticky (GstRtpFunnel * funnel, GstPad * pad)
     goto done;
   }
 
-  caps = gst_event_new_caps (funnel->srccaps);
-  if (caps && !gst_pad_push_event (funnel->srcpad, caps)) {
+  caps_ev = gst_event_new_caps (funnel->srccaps);
+  if (caps_ev && !gst_pad_push_event (funnel->srcpad, caps_ev)) {
     GST_ERROR_OBJECT (funnel, "Could not push caps");
     goto done;
   }
