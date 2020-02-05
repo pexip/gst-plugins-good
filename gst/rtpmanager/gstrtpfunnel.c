@@ -24,10 +24,14 @@
 #include "config.h"
 #endif
 
+#include <gst/rtp/gstrtpbuffer.h>
+
 #include "gstrtpfunnel.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_rtp_funnel_debug);
 #define GST_CAT_DEFAULT gst_rtp_funnel_debug
+
+#define TWCC_EXTMAP_STR "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
 
 /**************** GstRTPFunnelPad ****************/
 
@@ -40,6 +44,7 @@ struct _GstRtpFunnelPad
 {
   GstPad pad;
   guint32 ssrc;
+  gboolean has_twcc;
 };
 
 G_DEFINE_TYPE (GstRtpFunnelPad, gst_rtp_funnel_pad, GST_TYPE_PAD);
@@ -79,6 +84,10 @@ struct _GstRtpFunnel
   GHashTable *ssrc_to_pad;
   /* The last pad data was chained on */
   GstPad *current_pad;
+
+  guint8 twcc_ext_id;           /* the negotiated twcc extmap id */
+  guint16 twcc_seqnum;          /* our internal twcc seqnum */
+  guint twcc_pads;              /* numer of sinkpads with negotiated twcc */
 
   /* properties */
   gint common_ts_offset;
@@ -148,6 +157,43 @@ done:
   return;
 }
 
+static void
+gst_rtp_funnel_set_twcc_seqnum (GstRtpFunnel * funnel,
+    GstPad * pad, GstBuffer ** buf)
+{
+  GstRtpFunnelPad *fpad = GST_RTP_FUNNEL_PAD_CAST (pad);
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+
+  if (!funnel->twcc_ext_id || !fpad->has_twcc)
+    return;
+
+  *buf = gst_buffer_make_writable (*buf);
+
+  if (gst_rtp_buffer_map (*buf, GST_MAP_READWRITE, &rtp)) {
+    gpointer data;
+
+    /* if there already is a twcc-seqnum inside the packet */
+    if (gst_rtp_buffer_get_extension_onebyte_header (&rtp, funnel->twcc_ext_id,
+            0, &data, NULL)) {
+
+      /* with only one pad, we read the twcc-seqnum instead of writing it */
+      if (funnel->twcc_pads == 1) {
+        funnel->twcc_seqnum = GST_READ_UINT16_BE (data);
+      } else {
+        GST_WRITE_UINT16_BE (data, funnel->twcc_seqnum);
+      }
+    } else {
+      guint16 seq_be;
+      GST_WRITE_UINT16_BE (&seq_be, funnel->twcc_seqnum);
+      gst_rtp_buffer_add_extension_onebyte_header (&rtp, funnel->twcc_ext_id,
+          &seq_be, 2);
+    }
+  }
+  gst_rtp_buffer_unmap (&rtp);
+
+  funnel->twcc_seqnum++;
+}
+
 static GstFlowReturn
 gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
     gboolean is_list, GstMiniObject * obj)
@@ -161,11 +207,13 @@ gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
   gst_rtp_funnel_send_sticky (funnel, pad);
   gst_rtp_funnel_forward_segment (funnel, pad);
 
-  if (is_list)
+  if (is_list) {
     res = gst_pad_push_list (funnel->srcpad, GST_BUFFER_LIST_CAST (obj));
-  else
-    res = gst_pad_push (funnel->srcpad, GST_BUFFER_CAST (obj));
-
+  } else {
+    GstBuffer *buf = GST_BUFFER_CAST (obj);
+    gst_rtp_funnel_set_twcc_seqnum (funnel, pad, &buf);
+    res = gst_pad_push (funnel->srcpad, buf);
+  }
   GST_PAD_STREAM_UNLOCK (funnel->srcpad);
 
   return res;
@@ -190,10 +238,55 @@ gst_rtp_funnel_sink_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
       GST_MINI_OBJECT_CAST (buffer));
 }
 
+static void
+gst_rtp_funnel_set_twcc_ext_id (GstRtpFunnel * funnel, guint8 twcc_ext_id)
+{
+  gchar *name;
+
+  if (funnel->twcc_ext_id == twcc_ext_id)
+    return;
+
+  name = g_strdup_printf ("extmap-%u", twcc_ext_id);
+  gst_caps_set_simple (funnel->srccaps, name, G_TYPE_STRING, TWCC_EXTMAP_STR,
+      NULL);
+  g_free (name);
+
+  /* make sure we update the sticky with the new caps */
+  funnel->send_sticky_events = TRUE;
+
+  GST_INFO_OBJECT (funnel, "Setting twcc-ext-id to %u", twcc_ext_id);
+  funnel->twcc_ext_id = twcc_ext_id;
+}
+
+static guint8
+_get_extmap_id_for_attribute (const GstStructure * s, const gchar * ext_name)
+{
+  guint i;
+  guint8 extmap_id = 0;
+  guint n_fields = gst_structure_n_fields (s);
+
+  for (i = 0; i < n_fields; i++) {
+    const gchar *field_name = gst_structure_nth_field_name (s, i);
+    if (g_str_has_prefix (field_name, "extmap-")) {
+      const gchar *str = gst_structure_get_string (s, field_name);
+      if (str && g_strcmp0 (str, ext_name) == 0) {
+        gint64 id = g_ascii_strtoll (field_name + 7, NULL, 10);
+        if (id > 0 && id < 15) {
+          extmap_id = id;
+          break;
+        }
+      }
+    }
+  }
+  return extmap_id;
+}
+
 static gboolean
 gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
   GstRtpFunnel *funnel = GST_RTP_FUNNEL_CAST (parent);
+  GstRtpFunnelPad *fpad = GST_RTP_FUNNEL_PAD_CAST (pad);
+
   gboolean forward = TRUE;
   gboolean ret = TRUE;
 
@@ -209,6 +302,7 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       GstCaps *caps;
       GstStructure *s;
       guint ssrc;
+      guint8 ext_id;
       gst_event_parse_caps (event, &caps);
 
       if (!gst_caps_can_intersect (funnel->srccaps, caps)) {
@@ -219,12 +313,17 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 
       s = gst_caps_get_structure (caps, 0);
       if (gst_structure_get_uint (s, "ssrc", &ssrc)) {
-        GstRtpFunnelPad *fpad = GST_RTP_FUNNEL_PAD_CAST (pad);
         fpad->ssrc = ssrc;
         GST_DEBUG_OBJECT (pad, "Got ssrc: %u", ssrc);
         GST_OBJECT_LOCK (funnel);
         g_hash_table_insert (funnel->ssrc_to_pad, GUINT_TO_POINTER (ssrc), pad);
         GST_OBJECT_UNLOCK (funnel);
+      }
+      ext_id = _get_extmap_id_for_attribute (s, TWCC_EXTMAP_STR);
+      if (ext_id > 0) {
+        fpad->has_twcc = TRUE;
+        funnel->twcc_pads++;
+        gst_rtp_funnel_set_twcc_ext_id (funnel, ext_id);
       }
 
       forward = FALSE;
@@ -247,8 +346,7 @@ static gboolean
 gst_rtp_funnel_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
   GstRtpFunnel *funnel = GST_RTP_FUNNEL_CAST (parent);
-  gboolean res = FALSE;
-  (void) funnel;
+  gboolean res = TRUE;
 
   switch (GST_QUERY_TYPE (query)) {
     case GST_QUERY_CAPS:
@@ -273,7 +371,20 @@ gst_rtp_funnel_sink_query (GstPad * pad, GstObject * parent, GstQuery * query)
       GST_DEBUG_OBJECT (pad, "Answering caps-query with caps: %"
           GST_PTR_FORMAT, new_caps);
       gst_caps_unref (new_caps);
-      res = TRUE;
+      break;
+    }
+    case GST_QUERY_ACCEPT_CAPS:
+    {
+      GstCaps *caps;
+      gboolean result;
+      gst_query_parse_accept_caps (query, &caps);
+      result = gst_caps_is_subset (caps, funnel->srccaps);
+      if (!result) {
+        GST_ERROR_OBJECT (pad,
+            "caps: %" GST_PTR_FORMAT " were not compatible with: %"
+            GST_PTR_FORMAT, caps, funnel->srccaps);
+      }
+      gst_query_set_accept_caps_result (query, result);
       break;
     }
     default:
