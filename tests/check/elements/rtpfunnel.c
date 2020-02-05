@@ -81,7 +81,8 @@ GST_START_TEST (rtpfunnel_ssrc_demuxing)
   gst_harness_teardown (h1);
 }
 
-GST_END_TEST
+GST_END_TEST;
+
 GST_START_TEST (rtpfunnel_ssrc_downstream_not_leaking_through)
 {
   GstHarness *h = gst_harness_new_with_padnames ("rtpfunnel",
@@ -100,7 +101,8 @@ GST_START_TEST (rtpfunnel_ssrc_downstream_not_leaking_through)
   gst_harness_teardown (h);
 }
 
-GST_END_TEST
+GST_END_TEST;
+
 GST_START_TEST (rtpfunnel_common_ts_offset)
 {
   GstHarness *h = gst_harness_new_with_padnames ("rtpfunnel",
@@ -122,7 +124,8 @@ GST_START_TEST (rtpfunnel_common_ts_offset)
   gst_harness_teardown (h);
 }
 
-GST_END_TEST
+GST_END_TEST;
+
 GST_START_TEST (rtpfunnel_stress)
 {
   GstHarness *h = gst_harness_new_with_padnames ("rtpfunnel",
