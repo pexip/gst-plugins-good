@@ -1299,7 +1299,7 @@ GST_START_TEST (test_rtx_expected_next)
    * that will have a timeout of the expected arrival-time for that seqnum,
    * and a delay equal to 2*jitter==0 and 0.5*packet_spacing==10ms */
   timeout = next_seqnum * TEST_BUF_DURATION;
-  rtx_delay_ms = 0.5 * TEST_BUF_MS;
+  rtx_delay_ms = TEST_BUF_MS / 2;
 
   /* We crank the clock to time-out the next scheduled timer */
   gst_harness_crank_single_clock_wait (h);
@@ -1408,8 +1408,8 @@ GST_START_TEST (test_rtx_two_missing)
   gint latency_ms = 200;
   guint next_seqnum;
   GstClockTime last_rtx_request, now;
-  gint rtx_delay_ms_0 = 0.5 * TEST_BUF_MS;
-  gint rtx_delay_ms_1 = 1.0 * TEST_BUF_MS;
+  gint rtx_delay_ms_0 = TEST_BUF_MS / 2;
+  gint rtx_delay_ms_1 = TEST_BUF_MS;
 
   g_object_set (h->element, "do-retransmission", TRUE, NULL);
   next_seqnum = construct_deterministic_initial_state (h, latency_ms);
@@ -1499,7 +1499,7 @@ GST_START_TEST (test_rtx_buffer_arrives_just_in_time)
   gint next_seqnum;
   GstBuffer *buffer;
   GstClockTime now, last_rtx_request;
-  gint rtx_delay_ms = 0.5 * TEST_BUF_MS;
+  gint rtx_delay_ms = TEST_BUF_MS / 2;
 
   g_object_set (h->element, "do-retransmission", TRUE,
       "rtx-max-retries", 1, NULL);
@@ -1545,7 +1545,7 @@ GST_START_TEST (test_rtx_buffer_arrives_too_late)
   gint latency_ms = 5 * TEST_BUF_MS;
   gint next_seqnum;
   GstClockTime now, last_rtx_request;
-  gint rtx_delay_ms = 0.5 * TEST_BUF_MS;
+  gint rtx_delay_ms = TEST_BUF_MS / 2;
 
   g_object_set (h->element, "do-retransmission", TRUE,
       "do-lost", TRUE, "rtx-max-retries", 1, NULL);
@@ -1595,7 +1595,7 @@ GST_START_TEST (test_rtx_original_buffer_does_not_update_rtx_stats)
   gint next_seqnum;
   GstBuffer *buffer;
   GstClockTime now, last_rtx_request;
-  gint rtx_delay_ms = 0.5 * TEST_BUF_MS;
+  gint rtx_delay_ms = TEST_BUF_MS / 2;
 
   g_object_set (h->element, "do-retransmission", TRUE,
       "rtx-max-retries", 1, NULL);
@@ -1673,8 +1673,8 @@ GST_START_TEST (test_rtx_duplicate_packet_updates_rtx_stats)
   gint latency_ms = 100;
   gint next_seqnum;
   GstClockTime now, rtx_request_6, rtx_request_7;
-  gint rtx_delay_ms_0 = 0.5 * TEST_BUF_MS;
-  gint rtx_delay_ms_1 = 1.0 * TEST_BUF_MS;
+  gint rtx_delay_ms_0 = TEST_BUF_MS / 2;
+  gint rtx_delay_ms_1 = TEST_BUF_MS;
   gint i;
 
   g_object_set (h->element, "do-retransmission", TRUE, NULL);
@@ -1778,7 +1778,7 @@ GST_START_TEST (test_rtx_buffer_arrives_after_lost_updates_rtx_stats)
   gint latency_ms = 100;
   gint next_seqnum;
   GstClockTime now, last_rtx_request;
-  gint rtx_delay_ms = 0.5 * TEST_BUF_MS;
+  gint rtx_delay_ms = TEST_BUF_MS / 2;
 
   g_object_set (h->element, "do-retransmission", TRUE,
       "do-lost", TRUE, "rtx-max-retries", 1, NULL);
@@ -1829,7 +1829,7 @@ GST_START_TEST (test_rtx_rtt_larger_than_retry_timeout)
   gint latency_ms = 100;
   gint next_seqnum;
   gint rtx_retry_timeout_ms = 20;
-  gint rtx_delay_ms = 0.5 * TEST_BUF_MS;
+  gint rtx_delay_ms = TEST_BUF_MS / 2;
   gint rtt = rtx_retry_timeout_ms * GST_MSECOND + 1;
   GstClockTime now, first_request, second_request;
 
@@ -2090,7 +2090,7 @@ GST_START_TEST (test_rtx_timer_reuse)
 {
   GstHarness *h = gst_harness_new ("rtpjitterbuffer");
   gint latency_ms = 5 * TEST_BUF_MS;
-  gint rtx_delay_ms = 0.5 * TEST_BUF_MS;
+  gint rtx_delay_ms = TEST_BUF_MS / 2;
   guint next_seqnum;
 
   g_object_set (h->element, "do-retransmission", TRUE,
