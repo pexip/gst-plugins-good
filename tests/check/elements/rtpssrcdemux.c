@@ -104,7 +104,7 @@ rtpssrcdemux_pad_added (G_GNUC_UNUSED GstElement * demux, GstPad * src_pad,
 
 GST_START_TEST (test_event_forwarding)
 {
-  TestContext ctx = { NULL, };
+  TestContext ctx = { NULL, NULL, NULL, NULL};
   GstHarness *h;
   GstEvent *event;
   GstCaps *caps;
@@ -209,7 +209,7 @@ push_buffer_func (gpointer user_data)
 GST_START_TEST (test_oob_event_locking)
 {
   GstHarness *h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
-  LockTestContext ctx = { FALSE, };
+  LockTestContext ctx = { FALSE, NULL, NULL };
   GThread *thread;
 
   g_mutex_init (&ctx.mutex);
