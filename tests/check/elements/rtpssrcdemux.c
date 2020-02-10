@@ -209,9 +209,10 @@ push_buffer_func (gpointer user_data)
 GST_START_TEST (test_oob_event_locking)
 {
   GstHarness *h = gst_harness_new_with_padnames ("rtpssrcdemux", "sink", NULL);
-  LockTestContext ctx = { FALSE, NULL, NULL };
+  LockTestContext ctx;
   GThread *thread;
 
+  memset (&ctx, 0, sizeof (LockTestContext));
   g_mutex_init (&ctx.mutex);
   g_cond_init (&ctx.cond);
 
