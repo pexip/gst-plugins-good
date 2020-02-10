@@ -182,8 +182,8 @@ typedef struct
 } LockTestContext;
 
 static void
-new_ssrc_pad_cb (GstElement * element, guint ssrc, GstPad * pad,
-    LockTestContext * ctx)
+new_ssrc_pad_cb (G_GNUC_UNUSED GstElement * element, G_GNUC_UNUSED guint ssrc,
+    G_GNUC_UNUSED GstPad * pad, LockTestContext * ctx)
 {
   g_message ("Signalling ready");
   g_atomic_int_set (&ctx->ready, 1);
