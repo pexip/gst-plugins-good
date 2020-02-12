@@ -3112,7 +3112,10 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     }
 
     update_current_timer (jitterbuffer);
-    JBUF_WAIT_QUEUE (priv);
+    GST_ERROR_OBJECT (jitterbuffer,
+        "about to wait due to full jitterbuffer (%u packets)!",
+        rtp_jitter_buffer_num_packets (priv->jbuf));
+    /* JBUF_WAIT_QUEUE (priv); */
     if (priv->srcresult != GST_FLOW_OK)
       goto out_flushing;
   }
