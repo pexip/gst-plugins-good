@@ -3149,7 +3149,7 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_deadline_ts_offset);
   tcase_add_test (tc_chain, test_big_gap_seqnum);
   tcase_add_test (tc_chain, test_big_gap_arrival_time);
-  tcase_add_test (tc_chain, test_fill_queue);
+  tcase_skip_broken_test (tc_chain, test_fill_queue);
 
   tcase_add_loop_test (tc_chain,
       test_considered_lost_packet_in_large_gap_arrives, 0,
