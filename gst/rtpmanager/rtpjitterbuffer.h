@@ -211,4 +211,7 @@ RTPJitterBufferItem * rtp_jitter_buffer_alloc_item       (gpointer data, guint t
                                                           guint rtptime, GDestroyNotify free_data);
 void                  rtp_jitter_buffer_free_item        (RTPJitterBufferItem * item);
 
+
+void rtp_jitter_buffer_print_queue (RTPJitterBuffer * jbuf);
+
 #endif /* __RTP_JITTER_BUFFER_H__ */

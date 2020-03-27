@@ -1442,3 +1442,17 @@ rtp_jitter_buffer_free_item (RTPJitterBufferItem * item)
     item->free_data (item->data);
   g_slice_free (RTPJitterBufferItem, item);
 }
+
+void
+rtp_jitter_buffer_print_queue (RTPJitterBuffer * jbuf)
+{
+  RTPJitterBufferItem *item =
+      (RTPJitterBufferItem *) g_queue_peek_head_link (jbuf->packets);
+  guint i = 0;
+
+  while (item) {
+    GST_ERROR ("%u: seqnum: %u, rtptime: %u, data: %" GST_PTR_FORMAT, i++,
+        item->seqnum, item->rtptime, item->data);
+    item = (RTPJitterBufferItem *) item->next;
+  }
+}
