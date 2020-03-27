@@ -3543,9 +3543,12 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
       GST_DEBUG_OBJECT (jitterbuffer, "%sPushing event %" GST_PTR_FORMAT
           ", seqnum %d", do_push ? "" : "NOT ", outevent, seqnum);
 
-      if (do_push)
-        gst_pad_push_event (priv->srcpad, outevent);
-      else if (outevent)
+      if (do_push) {
+        if (GST_EVENT_IS_DOWNSTREAM (outevent))
+          gst_pad_push_event (priv->srcpad, outevent);
+        else
+          gst_pad_push_event (priv->sinkpad, outevent);
+      } else if (outevent)
         gst_event_unref (outevent);
 
       result = GST_FLOW_OK;
@@ -3862,9 +3865,8 @@ do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
   rtp_timer_queue_update_timer (priv->timers, timer, timer->seqnum,
       timer->rtx_base + timer->rtx_retry, timer->rtx_delay, offset, FALSE);
 
-  JBUF_UNLOCK (priv);
-  gst_pad_push_event (priv->sinkpad, event);
-  JBUF_LOCK (priv);
+  rtp_jitter_buffer_prepend_event (priv->jbuf, event);
+  JBUF_SIGNAL_EVENT (priv);
 
   return FALSE;
 }
@@ -4018,11 +4020,6 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       /* execute the remaining timers */
       while ((timer = (RtpTimer *) g_queue_pop_head_link (&timers)))
         do_timeout (jitterbuffer, timer, now);
-
-      /* do_expected_timeout(), called by do_timeout will drop the
-       * JBUF_LOCK, so we need to check if we are still running */
-      if (!priv->timer_running)
-        goto stopping;
     }
 
     timer = rtp_timer_queue_peek_earliest (priv->timers);
