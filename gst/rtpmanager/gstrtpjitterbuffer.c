@@ -2771,7 +2771,7 @@ get_current_running_time (GstRtpJitterBuffer * jitterbuffer)
 
 static GstFlowReturn
 gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
-    GstPad * pad, GstObject * parent, guint16 seqnum)
+    GstPad * pad, GstObject * parent)
 {
   GstRtpJitterBufferPrivate *priv = jitterbuffer->priv;
   GstFlowReturn ret = GST_FLOW_OK;
@@ -2786,18 +2786,6 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
   rtp_timer_queue_remove_all (priv->timers);
   priv->discont = TRUE;
   priv->last_popped_seqnum = -1;
-
-  if (priv->gap_packets.head) {
-    GstBuffer *gap_buffer = priv->gap_packets.head->data;
-    GstRTPBuffer gap_rtp = GST_RTP_BUFFER_INIT;
-
-    gst_rtp_buffer_map (gap_buffer, GST_MAP_READ, &gap_rtp);
-    priv->next_seqnum = gst_rtp_buffer_get_seq (&gap_rtp);
-    gst_rtp_buffer_unmap (&gap_rtp);
-  } else {
-    priv->next_seqnum = seqnum;
-  }
-
   priv->last_in_pts = -1;
   priv->next_in_seqnum = -1;
 
@@ -3032,6 +3020,9 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   if (G_UNLIKELY (expected == -1)) {
     GST_DEBUG_OBJECT (jitterbuffer, "First buffer #%d", seqnum);
 
+    /* this is the buffer we now expect to pop out */
+    priv->next_seqnum = seqnum;
+
     /* calculate a pts based on rtptime and arrival time (dts) */
     pts =
         rtp_jitter_buffer_calculate_pts (priv->jbuf, dts, estimated_dts,
@@ -3073,7 +3064,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
           rtp_timer_queue_length (priv->timers), max_dropout);
       g_queue_insert_sorted (&priv->gap_packets, buffer,
           (GCompareDataFunc) compare_buffer_seqnum, NULL);
-      return gst_rtp_jitter_buffer_reset (jitterbuffer, pad, parent, seqnum);
+      return gst_rtp_jitter_buffer_reset (jitterbuffer, pad, parent);
     }
 
     /* Special handling of large gaps */
@@ -3081,7 +3072,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
       gboolean reset = handle_big_gap_buffer (jitterbuffer, buffer, pt, seqnum,
           gap, max_dropout, max_misorder);
       if (reset) {
-        return gst_rtp_jitter_buffer_reset (jitterbuffer, pad, parent, seqnum);
+        return gst_rtp_jitter_buffer_reset (jitterbuffer, pad, parent);
       } else {
         GST_DEBUG_OBJECT (jitterbuffer,
             "Had big gap, waiting for more consecutive packets");
