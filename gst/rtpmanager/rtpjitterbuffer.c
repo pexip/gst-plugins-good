@@ -978,6 +978,7 @@ done:
  * @item: an #RTPJitterBufferItem to insert
  * @head: TRUE when the head element changed.
  * @percent: the buffering percent after insertion
+ * @prepend: if possible, prepend instead of append the item
  *
  * Inserts @item into the packet queue of @jbuf. The sequence number of the
  * packet will be used to sort the packets. This function takes ownerhip of
@@ -991,7 +992,7 @@ done:
  */
 gboolean
 rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
-    gboolean * head, gint * percent)
+    gboolean * head, gint * percent, gboolean prepend)
 {
   GList *list, *event = NULL;
   guint16 seqnum;
@@ -1001,9 +1002,12 @@ rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
 
   list = jbuf->packets->tail;
 
-  /* no seqnum, simply append then */
-  if (item->seqnum == -1)
-    goto append;
+  /* no seqnum, prepend if asked to, else append  */
+  if (item->seqnum == -1) {
+    if (prepend)
+      list = NULL;
+    goto insert;
+  }
 
   seqnum = item->seqnum;
 
@@ -1045,7 +1049,7 @@ rtp_jitter_buffer_insert (RTPJitterBuffer * jbuf, RTPJitterBufferItem * item,
   if (event)
     list = event;
 
-append:
+insert:
   queue_do_insert (jbuf, list, (GList *) item);
 
   /* buffering mode, update buffer stats */

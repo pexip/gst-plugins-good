@@ -176,7 +176,8 @@ void                  rtp_jitter_buffer_reset_skew       (RTPJitterBuffer *jbuf)
 
 gboolean              rtp_jitter_buffer_insert           (RTPJitterBuffer *jbuf,
                                                           RTPJitterBufferItem *item,
-                                                          gboolean *head, gint *percent);
+                                                          gboolean *head, gint *percent,
+                                                          gboolean prepend);
 
 void                  rtp_jitter_buffer_disable_buffering (RTPJitterBuffer *jbuf, gboolean disabled);
 

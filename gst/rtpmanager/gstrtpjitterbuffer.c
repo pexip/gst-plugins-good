@@ -1859,7 +1859,7 @@ queue_event (GstRtpJitterBuffer * jitterbuffer, GstEvent * event)
 
   GST_DEBUG_OBJECT (jitterbuffer, "adding event");
   item = alloc_event_item (event);
-  rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL);
+  rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL, FALSE);
   if (head || priv->eos)
     JBUF_SIGNAL_EVENT (priv);
 
@@ -2450,7 +2450,7 @@ insert_lost_event (GstRtpJitterBuffer * jitterbuffer,
   }
   item = rtp_jitter_buffer_alloc_item (event, ITEM_TYPE_LOST, -1, -1, seqnum,
       lost_packets, -1, (GDestroyNotify) gst_mini_object_unref);
-  if (!rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL))
+  if (!rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL, FALSE))
     /* Duplicate */
     rtp_jitter_buffer_free_item (item);
 
@@ -2809,7 +2809,7 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
     RTPJitterBufferItem *item;
 
     item = alloc_event_item (l->data);
-    rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL);
+    rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL, FALSE);
   }
   g_list_free (events);
 
@@ -3227,7 +3227,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
    * FALSE if a packet with the same seqnum was already in the queue, meaning we
    * have a duplicate. */
   if (G_UNLIKELY (!rtp_jitter_buffer_insert (priv->jbuf, item, &head,
-              &percent))) {
+              &percent, FALSE))) {
     if (GST_BUFFER_IS_RETRANSMISSION (buffer) && timer)
       update_rtx_stats (jitterbuffer, timer, dts, FALSE);
     goto duplicate;
@@ -4405,7 +4405,7 @@ gst_rtp_jitter_buffer_sink_query (GstPad * pad, GstObject * parent,
           GST_DEBUG_OBJECT (jitterbuffer, "adding serialized query");
           item = rtp_jitter_buffer_alloc_item (query, ITEM_TYPE_QUERY, -1, -1,
               -1, 0, -1, NULL);
-          rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL);
+          rtp_jitter_buffer_insert (priv->jbuf, item, &head, NULL, FALSE);
           if (head)
             JBUF_SIGNAL_EVENT (priv);
           JBUF_WAIT_QUERY (priv, out_flushing);
