@@ -3066,15 +3066,16 @@ buffer_array_get_max_seqnum_delta (GArray * array)
 }
 
 static void
-buffer_array_append_sequential (GArray * array, guint num_bufs)
+buffer_array_append_sequential (GArray * array, guint num_bufs,
+    gint seqnum_delta, gint rtptime_delta, guint sleep_us)
 {
   guint i;
   for (i = 0; i < num_bufs; i++) {
     BufferArrayCtx ctx;
-    ctx.seqnum_d = 1;
-    ctx.rtptime_d = TEST_RTP_TS_DURATION;       /* 20ms for 8KHz */
+    ctx.seqnum_d = seqnum_delta;
+    ctx.rtptime_d = rtptime_delta;
     ctx.rtx = FALSE;
-    ctx.sleep_us = G_USEC_PER_SEC / 1000 * 20;  /* 20ms */
+    ctx.sleep_us = sleep_us;
     g_array_append_val (array, ctx);
   }
 }
@@ -3086,6 +3087,28 @@ buffer_array_append_ctx (GArray * array, BufferArrayCtx * bufs, guint num_bufs)
   for (i = 0; i < num_bufs; i++) {
     g_array_append_val (array, bufs[i]);
   }
+}
+
+static GstPadProbeReturn
+_delay_rtx_cb (G_GNUC_UNUSED GstPad * pad,
+    GstPadProbeInfo * info, gpointer user_data)
+{
+  GstEvent *event = GST_EVENT (info->data);
+
+  if (gst_event_has_name (event, "GstRTPRetransmissionRequest")) {
+    GST_DEBUG ("Delaying RTX event");
+    g_usleep (GPOINTER_TO_UINT (user_data));
+  }
+
+  return GST_PAD_PROBE_OK;
+}
+
+static gulong
+add_rtx_delay_probe (GstHarness * h, guint sleep_us)
+{
+  return gst_pad_add_probe (GST_PAD_PEER (h->srcpad),
+      GST_PAD_PROBE_TYPE_EVENT_UPSTREAM,
+      _delay_rtx_cb, GUINT_TO_POINTER (sleep_us), NULL);
 }
 
 static gboolean
@@ -3106,7 +3129,8 @@ check_for_stall (GstHarness * h, BufferArrayCtx * bufs, guint num_bufs)
   initial_bufs = latency_ms / TEST_BUF_MS;
 
   array = g_array_new (FALSE, FALSE, sizeof (BufferArrayCtx));
-  buffer_array_append_sequential (array, initial_bufs);
+  buffer_array_append_sequential (array, initial_bufs,
+      1, TEST_RTP_TS_DURATION, G_USEC_PER_SEC / 1000 * 20);
   buffer_array_append_ctx (array, bufs, num_bufs);
   max_seqnum = base_seqnum + buffer_array_get_max_seqnum_delta (array);
   buffer_array_push (h, array, base_seqnum, base_rtptime);
@@ -3117,8 +3141,9 @@ check_for_stall (GstHarness * h, BufferArrayCtx * bufs, guint num_bufs)
   g_usleep (G_USEC_PER_SEC);
   in_queue = gst_harness_buffers_in_queue (h);
 
-  /* push another 50 buffers normally */
-  buffer_array_append_sequential (array, 50);
+  /* push another 500 buffers normally */
+  buffer_array_append_sequential (array, 500,
+      1, TEST_RTP_TS_DURATION / 20, G_USEC_PER_SEC / 1000);
   base_seqnum = max_seqnum + 1;
   base_rtptime = base_seqnum * TEST_RTP_TS_DURATION;
   buffer_array_push (h, array, base_seqnum, base_rtptime);
@@ -3186,6 +3211,26 @@ GST_START_TEST (test_multiple_lost_do_not_stall)
     {-28, -5280, FALSE, 1000},
     /* *INDENT-ON* */
   };
+
+  g_object_set (h->element, "latency", 200,
+      "do-retransmission", TRUE, "do-lost", TRUE, NULL);
+  fail_unless (check_for_stall (h, bufs, G_N_ELEMENTS (bufs)));
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_new_stall)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  BufferArrayCtx bufs[] = {
+    /* *INDENT-OFF* */
+    { 199, 12960, FALSE, 148632 },
+    //{ 43, 38880, FALSE, 65463 },
+    /* *INDENT-ON* */
+  };
+
+  add_rtx_delay_probe (h, G_USEC_PER_SEC / 100);
 
   g_object_set (h->element, "latency", 200,
       "do-retransmission", TRUE, "do-lost", TRUE, NULL);
@@ -3268,6 +3313,7 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_reset_timers_does_not_stall);
   tcase_add_test (tc_chain, test_reset_timers_does_not_stall_2);
   tcase_add_test (tc_chain, test_multiple_lost_do_not_stall);
+  tcase_add_test (tc_chain, test_new_stall);
 
   return s;
 }
