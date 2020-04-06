@@ -3138,16 +3138,18 @@ check_for_stall (GstHarness * h, BufferArrayCtx * bufs, guint num_bufs)
 
   /* sleep a bit to settle things down, then find out
      how many buffers have been pushed out */
-  g_usleep (G_USEC_PER_SEC);
+  g_usleep (G_USEC_PER_SEC * 3);
   in_queue = gst_harness_buffers_in_queue (h);
 
   /* push another 500 buffers normally */
   buffer_array_append_sequential (array, 500,
       1, TEST_RTP_TS_DURATION / 20, G_USEC_PER_SEC / 1000);
-  base_seqnum = max_seqnum + 1;
+  base_seqnum = max_seqnum;
   base_rtptime = base_seqnum * TEST_RTP_TS_DURATION;
   buffer_array_push (h, array, base_seqnum, base_rtptime);
   g_array_unref (array);
+
+  g_usleep (G_USEC_PER_SEC * 3);
 
   /* we expect at least some of those buffers to come through */
   return gst_harness_buffers_in_queue (h) > in_queue;
@@ -3225,16 +3227,85 @@ GST_START_TEST (test_new_stall)
   GstHarness *h = gst_harness_new ("rtpjitterbuffer");
   BufferArrayCtx bufs[] = {
     /* *INDENT-OFF* */
-    { 199, 12960, FALSE, 148632 },
-    //{ 43, 38880, FALSE, 65463 },
+    { 77, 9280, FALSE, 29498 },
+    { 63, -800, FALSE, 40666 },
+    { 75, 10400, TRUE, 80859 },
+    { 9, 11680, FALSE, 98574 },
+    { 77, 11040, FALSE, 49540 },
+    { 47, 9120, TRUE, 42253 },
+    { 4, 320, FALSE, 32178 },
+    { 2, 2240, TRUE, 68676 },
+    { 49, 7680, FALSE, 23544 },
+    { -6, 4800, FALSE, 35881 },
+    { 55, -1600, FALSE, 8241 },
+    { 67, 2080, TRUE, 55952 },
+    { 74, 4480, FALSE, 19251 },
+    { 73, -2880, FALSE, 1338 },
+    { -10, 2560, FALSE, 63680 },
+    { 30, 7360, TRUE, 36489 },
+    { 68, 3520, TRUE, 36855 },
+    { -11, 3360, TRUE, 78796 },
+    { 73, -1600, TRUE, 86725 },
+    { -4, 7360, FALSE, 94652 },
+
     /* *INDENT-ON* */
   };
 
   add_rtx_delay_probe (h, G_USEC_PER_SEC / 100);
 
-  g_object_set (h->element, "latency", 200,
-      "do-retransmission", TRUE, "do-lost", TRUE, NULL);
+  g_object_set (h->element,
+      "latency", 400,
+      "do-lost", TRUE,
+      "do-retransmission", TRUE,
+      "rtx-next-seqnum", FALSE,
+      "rtx-delay-reorder", 0,
+      "rtx-min-retry-timeout", 0,
+      "rtx-max-retries", 3,
+      NULL);
+
   fail_unless (check_for_stall (h, bufs, G_N_ELEMENTS (bufs)));
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
+GST_START_TEST (test_find_random_stall)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  guint i;
+  guint num_bufs = 20;
+  BufferArrayCtx *ctx = g_new0 (BufferArrayCtx, num_bufs);
+  for (i = 0; i < num_bufs; i++) {
+    ctx[i].seqnum_d = g_random_int_range (0, 100) - 20;
+    ctx[i].rtptime_d = g_random_int_range (0, 100) - 20;
+    ctx[i].rtptime_d *= TEST_RTP_TS_DURATION;
+    ctx[i].rtx = g_random_boolean ();
+    ctx[i].sleep_us = g_random_int_range (0, G_USEC_PER_SEC / 10);
+  }
+
+  g_object_set (h->element,
+      "latency", 400,
+      "do-lost", TRUE,
+      "do-retransmission", TRUE,
+      "rtx-next-seqnum", FALSE,
+      "rtx-delay-reorder", 0,
+      "rtx-min-retry-timeout", 0,
+      "rtx-max-retries", 3,
+      NULL);
+
+  //add_rtx_delay_probe (h, G_USEC_PER_SEC / 100);
+
+  if (!check_for_stall (h, ctx, num_bufs)) {
+    for (i = 0; i < num_bufs; i++) {
+      g_print ("    { %d, %d, %s, %d },\n",
+          ctx[i].seqnum_d, ctx[i].rtptime_d,
+          ctx[i].rtx ? "TRUE" : "FALSE", ctx[i].sleep_us);
+    }
+    fail_if (TRUE);
+  }
+
+  g_free (ctx);
   gst_harness_teardown (h);
 }
 
@@ -3314,6 +3385,8 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_reset_timers_does_not_stall_2);
   tcase_add_test (tc_chain, test_multiple_lost_do_not_stall);
   tcase_add_test (tc_chain, test_new_stall);
+
+  tcase_add_test (tc_chain, test_find_random_stall);
 
   return s;
 }
