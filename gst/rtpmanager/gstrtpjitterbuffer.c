@@ -405,7 +405,20 @@ struct _GstRtpJitterBufferPrivate
   /* accumulators; reset every time a drop message is posted */
   guint num_too_late;
   guint num_drop_on_latency;
+
+
+  GArray *debug_buffers;
 };
+
+typedef struct
+{
+  guint16 seqnum;
+  guint32 rtptime;
+  gboolean rtx;
+  GstClockTime dts;
+  GstClockTime now;
+} BufferRecvCtx;
+
 typedef enum
 {
   REASON_TOO_LATE,
@@ -1067,6 +1080,8 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   g_queue_init (&priv->gap_packets);
   gst_segment_init (&priv->segment, GST_FORMAT_TIME);
 
+  priv->debug_buffers = g_array_new (FALSE, FALSE, sizeof (BufferRecvCtx));
+
   /* reset skew detection initially */
   rtp_jitter_buffer_reset_skew (priv->jbuf);
   rtp_jitter_buffer_set_delay (priv->jbuf, priv->latency_ns);
@@ -1139,6 +1154,8 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   g_queue_foreach (&priv->gap_packets, (GFunc) gst_buffer_unref, NULL);
   g_queue_clear (&priv->gap_packets);
   g_object_unref (priv->jbuf);
+
+  g_array_unref (priv->debug_buffers);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -2894,6 +2911,14 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   else if (pts == -1)
     pts = dts;
 
+  BufferRecvCtx ctx;
+  ctx.seqnum = seqnum;
+  ctx.rtptime = rtptime;
+  ctx.rtx = is_rtx;
+  ctx.dts = dts;
+  ctx.now = get_current_running_time (jitterbuffer);
+  g_array_append_val (priv->debug_buffers, ctx);
+
   if (dts == -1) {
     /* If we have no DTS here, i.e. no capture time, get one from the
      * clock now to have something to calculate with in the future. */
@@ -3114,6 +3139,9 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     }
 
     update_current_timer (jitterbuffer);
+
+    g_assert_not_reached ();
+
     JBUF_WAIT_QUEUE (priv);
     if (priv->srcresult != GST_FLOW_OK)
       goto out_flushing;
