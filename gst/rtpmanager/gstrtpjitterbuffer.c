@@ -405,7 +405,10 @@ struct _GstRtpJitterBufferPrivate
   /* accumulators; reset every time a drop message is posted */
   guint num_too_late;
   guint num_drop_on_latency;
+
+  GArray *debug_log;
 };
+
 typedef enum
 {
   REASON_TOO_LATE,
@@ -529,6 +532,87 @@ static GQuark quark_rtx_count;
 static GQuark quark_rtx_success_count;
 static GQuark quark_rtx_per_packet;
 static GQuark quark_rtx_rtt;
+
+
+typedef enum
+{
+  LOG_CTX_CHAIN = 0,
+  LOG_CTX_LATENCY = 1,
+  LOG_CTX_WAIT_START = 2,
+  LOG_CTX_WAIT_FINISHED = 3,
+  LOG_CTX_WAIT_UNSCHEDULED = 4,
+  LOG_CTX_PUSH_BUFFER = 5,
+  LOG_CTX_PUSH_EVENT = 6,
+  LOG_CTX_PUSH_UPSTREAM_EVENT = 7,
+  CTX_LOG_RESET = 8,
+} LogCtxType;
+
+typedef struct
+{
+  LogCtxType type;
+  GstClockTime now;
+
+  guint16 seqnum;
+  guint32 rtptime;
+  gboolean rtx;
+  GstClockTime dts;
+  guint latency;
+} LogCtx;
+
+static void
+_log_ctx_add_chain (GstRtpJitterBuffer * jitterbuffer,
+    guint16 seqnum, guint32 rtptime, gboolean rtx, GstClockTime dts)
+{
+  LogCtx ctx;
+  memset (&ctx, 0, sizeof (LogCtx));
+
+  ctx.type = LOG_CTX_CHAIN;
+  ctx.now = get_current_running_time (jitterbuffer);
+
+  ctx.seqnum = seqnum;
+  ctx.rtptime = rtptime;
+  ctx.rtx = rtx;
+  ctx.dts = dts;
+  g_array_append_val (jitterbuffer->priv->debug_log, ctx);
+}
+
+static void
+_log_ctx_add_latency (GstRtpJitterBuffer * jitterbuffer, guint latency)
+{
+  LogCtx ctx;
+  memset (&ctx, 0, sizeof (LogCtx));
+
+  ctx.type = LOG_CTX_LATENCY;
+  ctx.now = get_current_running_time (jitterbuffer);
+
+  ctx.latency = latency;
+  g_array_append_val (jitterbuffer->priv->debug_log, ctx);
+}
+
+static void
+_log_ctx_add_push (GstRtpJitterBuffer * jitterbuffer, LogCtxType type, guint16 seqnum)
+{
+  LogCtx ctx;
+  memset (&ctx, 0, sizeof (LogCtx));
+
+  ctx.type = type;
+  ctx.now = get_current_running_time (jitterbuffer);
+
+  ctx.seqnum = seqnum;
+  g_array_append_val (jitterbuffer->priv->debug_log, ctx);
+}
+
+static void
+_log_ctx_add (GstRtpJitterBuffer * jitterbuffer, LogCtxType type)
+{
+  LogCtx ctx;
+  memset (&ctx, 0, sizeof (LogCtx));
+
+  ctx.type = type;
+  ctx.now = get_current_running_time (jitterbuffer);
+
+  g_array_append_val (jitterbuffer->priv->debug_log, ctx);
+}
 
 static void
 gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
@@ -1067,6 +1151,8 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   g_queue_init (&priv->gap_packets);
   gst_segment_init (&priv->segment, GST_FORMAT_TIME);
 
+  priv->debug_log = g_array_new (FALSE, FALSE, sizeof (LogCtx));
+
   /* reset skew detection initially */
   rtp_jitter_buffer_reset_skew (priv->jbuf);
   rtp_jitter_buffer_set_delay (priv->jbuf, priv->latency_ns);
@@ -1139,6 +1225,8 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   g_queue_foreach (&priv->gap_packets, (GFunc) gst_buffer_unref, NULL);
   g_queue_clear (&priv->gap_packets);
   g_object_unref (priv->jbuf);
+
+  g_array_unref (priv->debug_log);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -2779,6 +2867,8 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
   priv->last_in_pts = -1;
   priv->next_in_seqnum = -1;
 
+  _log_ctx_add (jitterbuffer, CTX_LOG_RESET);
+
   /* Insert all sticky events again in order, otherwise we would
    * potentially loose STREAM_START, CAPS or SEGMENT events
    */
@@ -2920,6 +3010,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
       seqnum, GST_TIME_ARGS (dts), GST_BUFFER_IS_DISCONT (buffer), is_rtx);
 
   JBUF_LOCK_CHECK (priv, out_flushing);
+
+  _log_ctx_add_chain (jitterbuffer, seqnum, rtptime, is_rtx, dts);
 
   if (G_UNLIKELY (priv->last_pt != pt)) {
     GstCaps *caps;
@@ -3114,6 +3206,9 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
     }
 
     update_current_timer (jitterbuffer);
+
+    g_assert_not_reached ();
+
     JBUF_WAIT_QUEUE (priv);
     if (priv->srcresult != GST_FLOW_OK)
       goto out_flushing;
@@ -3430,6 +3525,7 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
   gboolean do_push = TRUE;
   guint type;
   GstMessage *msg;
+  gboolean event_downstream = TRUE;
 
   /* when we get here we are ready to pop and push the buffer */
   item = rtp_jitter_buffer_pop (priv->jbuf, &percent);
@@ -3526,6 +3622,9 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
       result = gst_pad_push (priv->srcpad, outbuf);
 
       JBUF_LOCK_CHECK (priv, out_flushing);
+
+      _log_ctx_add_push (jitterbuffer, LOG_CTX_PUSH_BUFFER, seqnum);
+
       break;
     case ITEM_TYPE_LOST:
     case ITEM_TYPE_EVENT:
@@ -3541,7 +3640,8 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
           ", seqnum %d", do_push ? "" : "NOT ", outevent, seqnum);
 
       if (do_push) {
-        if (GST_EVENT_IS_DOWNSTREAM (outevent))
+        event_downstream = GST_EVENT_IS_DOWNSTREAM (outevent);
+        if (event_downstream)
           gst_pad_push_event (priv->srcpad, outevent);
         else
           gst_pad_push_event (priv->sinkpad, outevent);
@@ -3551,6 +3651,14 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
       result = GST_FLOW_OK;
 
       JBUF_LOCK_CHECK (priv, out_flushing);
+
+      if (do_push) {
+        if (event_downstream)
+          _log_ctx_add_push (jitterbuffer, LOG_CTX_PUSH_EVENT, seqnum);
+        else
+          _log_ctx_add_push (jitterbuffer, LOG_CTX_PUSH_UPSTREAM_EVENT, seqnum);
+      }
+
       break;
     case ITEM_TYPE_QUERY:
     {
@@ -4056,6 +4164,8 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       priv->timer_seqnum = timer->seqnum;
       GST_OBJECT_UNLOCK (jitterbuffer);
 
+      _log_ctx_add (jitterbuffer, LOG_CTX_WAIT_START);
+
       /* release the lock so that the other end can push stuff or unlock */
       JBUF_UNLOCK (priv);
 
@@ -4070,11 +4180,17 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       }
 
       if (ret != GST_CLOCK_UNSCHEDULED) {
+
+        _log_ctx_add (jitterbuffer, LOG_CTX_WAIT_FINISHED);
+
         now = priv->timer_timeout + MAX (clock_jitter, 0);
         GST_DEBUG_OBJECT (jitterbuffer,
             "sync done, %d, #%d, %" GST_STIME_FORMAT, ret, priv->timer_seqnum,
             GST_STIME_ARGS (clock_jitter));
       } else {
+
+        _log_ctx_add (jitterbuffer, LOG_CTX_WAIT_UNSCHEDULED);
+
         GST_DEBUG_OBJECT (jitterbuffer, "sync unscheduled");
       }
 
@@ -4491,6 +4607,9 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
       new_latency = g_value_get_uint (value);
 
       JBUF_LOCK (priv);
+
+      _log_ctx_add_latency (jitterbuffer, new_latency);
+
       old_latency = priv->latency_ms;
       priv->latency_ms = new_latency;
       priv->latency_ns = priv->latency_ms * GST_MSECOND;
