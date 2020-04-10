@@ -408,6 +408,7 @@ struct _GstRtpJitterBufferPrivate
 
 
   GArray *debug_buffers;
+  GArray *debug_latency;
 };
 
 typedef struct
@@ -418,6 +419,13 @@ typedef struct
   GstClockTime dts;
   GstClockTime now;
 } BufferRecvCtx;
+
+typedef struct
+{
+  guint latency;
+  GstClockTime now;
+} LatencyCtx;
+
 
 typedef enum
 {
@@ -1081,6 +1089,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   gst_segment_init (&priv->segment, GST_FORMAT_TIME);
 
   priv->debug_buffers = g_array_new (FALSE, FALSE, sizeof (BufferRecvCtx));
+  priv->debug_latency = g_array_new (FALSE, FALSE, sizeof (LatencyCtx));
 
   /* reset skew detection initially */
   rtp_jitter_buffer_reset_skew (priv->jbuf);
@@ -1156,6 +1165,7 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   g_object_unref (priv->jbuf);
 
   g_array_unref (priv->debug_buffers);
+  g_array_unref (priv->debug_latency);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -4517,6 +4527,11 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
       guint new_latency, old_latency;
 
       new_latency = g_value_get_uint (value);
+
+      LatencyCtx ctx;
+      ctx.latency = new_latency;
+      ctx.now = get_current_running_time (jitterbuffer);
+      g_array_append_val (priv->debug_latency, ctx);
 
       JBUF_LOCK (priv);
       old_latency = priv->latency_ms;
