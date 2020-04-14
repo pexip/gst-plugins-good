@@ -1547,7 +1547,7 @@ rtp_jitter_buffer_is_full (RTPJitterBuffer * jbuf)
   return rtp_jitter_buffer_get_seqnum_diff (jbuf) >= 32765 &&
       rtp_jitter_buffer_num_packets (jbuf) > 10000;
 */
-  return rtp_jitter_buffer_num_packets (jbuf) > 1000;
+  return rtp_jitter_buffer_num_packets (jbuf) > 500;
 }
 
 

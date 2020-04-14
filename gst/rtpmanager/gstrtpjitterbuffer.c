@@ -406,26 +406,8 @@ struct _GstRtpJitterBufferPrivate
   guint num_too_late;
   guint num_drop_on_latency;
 
-
-  GArray *debug_buffers;
-  GArray *debug_latency;
+  GArray *debug_log;
 };
-
-typedef struct
-{
-  guint16 seqnum;
-  guint32 rtptime;
-  gboolean rtx;
-  GstClockTime dts;
-  GstClockTime now;
-} BufferRecvCtx;
-
-typedef struct
-{
-  guint latency;
-  GstClockTime now;
-} LatencyCtx;
-
 
 typedef enum
 {
@@ -550,6 +532,71 @@ static GQuark quark_rtx_count;
 static GQuark quark_rtx_success_count;
 static GQuark quark_rtx_per_packet;
 static GQuark quark_rtx_rtt;
+
+
+typedef enum
+{
+  LOG_CTX_CHAIN = 0,
+  LOG_CTX_LATENCY = 1,
+  LOG_CTX_WAIT_START = 2,
+  LOG_CTX_WAIT_FINISHED = 3,
+  LOG_CTX_WAIT_UNSCHEDULED = 4,
+} LogCtxType;
+
+typedef struct
+{
+  LogCtxType type;
+  GstClockTime now;
+
+  guint16 seqnum;
+  guint32 rtptime;
+  gboolean rtx;
+  GstClockTime dts;
+  guint latency;
+} LogCtx;
+
+static void
+_log_ctx_add_chain (GstRtpJitterBuffer * jitterbuffer,
+    guint16 seqnum, guint32 rtptime, gboolean rtx, GstClockTime dts)
+{
+  LogCtx ctx;
+  memset (&ctx, 0, sizeof (LogCtx));
+
+  ctx.type = LOG_CTX_CHAIN;
+  ctx.now = get_current_running_time (jitterbuffer);
+
+  ctx.seqnum = seqnum;
+  ctx.rtptime = rtptime;
+  ctx.rtx = rtx;
+  ctx.dts = dts;
+  g_array_append_val (jitterbuffer->priv->debug_log, ctx);
+}
+
+static void
+_log_ctx_add_latency (GstRtpJitterBuffer * jitterbuffer, guint latency)
+{
+  LogCtx ctx;
+  memset (&ctx, 0, sizeof (LogCtx));
+
+  ctx.type = LOG_CTX_LATENCY;
+  ctx.now = get_current_running_time (jitterbuffer);
+
+  ctx.latency = latency;
+  g_array_append_val (jitterbuffer->priv->debug_log, ctx);
+}
+
+static void
+_log_ctx_add (GstRtpJitterBuffer * jitterbuffer, LogCtxType type)
+{
+  LogCtx ctx;
+  memset (&ctx, 0, sizeof (LogCtx));
+
+  ctx.type = type;
+  ctx.now = get_current_running_time (jitterbuffer);
+
+  g_array_append_val (jitterbuffer->priv->debug_log, ctx);
+}
+
 
 static void
 gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
@@ -1088,8 +1135,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   g_queue_init (&priv->gap_packets);
   gst_segment_init (&priv->segment, GST_FORMAT_TIME);
 
-  priv->debug_buffers = g_array_new (FALSE, FALSE, sizeof (BufferRecvCtx));
-  priv->debug_latency = g_array_new (FALSE, FALSE, sizeof (LatencyCtx));
+  priv->debug_log = g_array_new (FALSE, FALSE, sizeof (LogCtx));
 
   /* reset skew detection initially */
   rtp_jitter_buffer_reset_skew (priv->jbuf);
@@ -1164,8 +1210,7 @@ gst_rtp_jitter_buffer_finalize (GObject * object)
   g_queue_clear (&priv->gap_packets);
   g_object_unref (priv->jbuf);
 
-  g_array_unref (priv->debug_buffers);
-  g_array_unref (priv->debug_latency);
+  g_array_unref (priv->debug_log);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -2921,14 +2966,6 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   else if (pts == -1)
     pts = dts;
 
-  BufferRecvCtx ctx;
-  ctx.seqnum = seqnum;
-  ctx.rtptime = rtptime;
-  ctx.rtx = is_rtx;
-  ctx.dts = dts;
-  ctx.now = get_current_running_time (jitterbuffer);
-  g_array_append_val (priv->debug_buffers, ctx);
-
   if (dts == -1) {
     /* If we have no DTS here, i.e. no capture time, get one from the
      * clock now to have something to calculate with in the future. */
@@ -2955,6 +2992,8 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
       seqnum, GST_TIME_ARGS (dts), GST_BUFFER_IS_DISCONT (buffer), is_rtx);
 
   JBUF_LOCK_CHECK (priv, out_flushing);
+
+  _log_ctx_add_chain (jitterbuffer, seqnum, rtptime, is_rtx, dts);
 
   if (G_UNLIKELY (priv->last_pt != pt)) {
     GstCaps *caps;
@@ -4094,6 +4133,8 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       priv->timer_seqnum = timer->seqnum;
       GST_OBJECT_UNLOCK (jitterbuffer);
 
+      _log_ctx_add (jitterbuffer, LOG_CTX_WAIT_START);
+
       /* release the lock so that the other end can push stuff or unlock */
       JBUF_UNLOCK (priv);
 
@@ -4108,11 +4149,17 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       }
 
       if (ret != GST_CLOCK_UNSCHEDULED) {
+
+        _log_ctx_add (jitterbuffer, LOG_CTX_WAIT_FINISHED);
+
         now = priv->timer_timeout + MAX (clock_jitter, 0);
         GST_DEBUG_OBJECT (jitterbuffer,
             "sync done, %d, #%d, %" GST_STIME_FORMAT, ret, priv->timer_seqnum,
             GST_STIME_ARGS (clock_jitter));
       } else {
+
+        _log_ctx_add (jitterbuffer, LOG_CTX_WAIT_UNSCHEDULED);
+
         GST_DEBUG_OBJECT (jitterbuffer, "sync unscheduled");
       }
 
@@ -4528,12 +4575,10 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
 
       new_latency = g_value_get_uint (value);
 
-      LatencyCtx ctx;
-      ctx.latency = new_latency;
-      ctx.now = get_current_running_time (jitterbuffer);
-      g_array_append_val (priv->debug_latency, ctx);
-
       JBUF_LOCK (priv);
+
+      _log_ctx_add_latency (jitterbuffer, new_latency);
+
       old_latency = priv->latency_ms;
       priv->latency_ms = new_latency;
       priv->latency_ns = priv->latency_ms * GST_MSECOND;
