@@ -541,6 +541,10 @@ typedef enum
   LOG_CTX_WAIT_START = 2,
   LOG_CTX_WAIT_FINISHED = 3,
   LOG_CTX_WAIT_UNSCHEDULED = 4,
+  LOG_CTX_PUSH_BUFFER = 5,
+  LOG_CTX_PUSH_EVENT = 6,
+  LOG_CTX_PUSH_UPSTREAM_EVENT = 7,
+  CTX_LOG_RESET = 8,
 } LogCtxType;
 
 typedef struct
@@ -596,7 +600,6 @@ _log_ctx_add (GstRtpJitterBuffer * jitterbuffer, LogCtxType type)
 
   g_array_append_val (jitterbuffer->priv->debug_log, ctx);
 }
-
 
 static void
 gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
@@ -2851,6 +2854,8 @@ gst_rtp_jitter_buffer_reset (GstRtpJitterBuffer * jitterbuffer,
   priv->last_in_pts = -1;
   priv->next_in_seqnum = -1;
 
+  _log_ctx_add (jitterbuffer, CTX_LOG_RESET);
+
   /* Insert all sticky events again in order, otherwise we would
    * potentially loose STREAM_START, CAPS or SEGMENT events
    */
@@ -3507,6 +3512,7 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
   gboolean do_push = TRUE;
   guint type;
   GstMessage *msg;
+  gboolean event_downstream = TRUE;
 
   /* when we get here we are ready to pop and push the buffer */
   item = rtp_jitter_buffer_pop (priv->jbuf, &percent);
@@ -3603,6 +3609,9 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
       result = gst_pad_push (priv->srcpad, outbuf);
 
       JBUF_LOCK_CHECK (priv, out_flushing);
+
+      _log_ctx_add (jitterbuffer, LOG_CTX_PUSH_BUFFER);
+
       break;
     case ITEM_TYPE_LOST:
     case ITEM_TYPE_EVENT:
@@ -3614,11 +3623,12 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
         g_queue_clear (&priv->gap_packets);
       }
 
+      event_downstream = GST_EVENT_IS_DOWNSTREAM (outevent);
       GST_DEBUG_OBJECT (jitterbuffer, "%sPushing event %" GST_PTR_FORMAT
           ", seqnum %d", do_push ? "" : "NOT ", outevent, seqnum);
 
       if (do_push) {
-        if (GST_EVENT_IS_DOWNSTREAM (outevent))
+        if (event_downstream)
           gst_pad_push_event (priv->srcpad, outevent);
         else
           gst_pad_push_event (priv->sinkpad, outevent);
@@ -3628,6 +3638,14 @@ pop_and_push_next (GstRtpJitterBuffer * jitterbuffer, guint seqnum)
       result = GST_FLOW_OK;
 
       JBUF_LOCK_CHECK (priv, out_flushing);
+
+      if (do_push) {
+        if (event_downstream)
+          _log_ctx_add (jitterbuffer, LOG_CTX_PUSH_EVENT);
+        else
+          _log_ctx_add (jitterbuffer, LOG_CTX_PUSH_UPSTREAM_EVENT);
+      }
+
       break;
     case ITEM_TYPE_QUERY:
     {
