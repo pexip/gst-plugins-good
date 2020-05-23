@@ -3236,6 +3236,65 @@ GST_START_TEST (test_reset_using_rtx_packets_does_not_stall)
 
 GST_END_TEST;
 
+GST_START_TEST (test_dtx_basics)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  GstBuffer *buf;
+  GstClockTime ts;
+  guint16 next_seqnum;
+  gint latency_ms = 40;
+
+  g_object_set (h->element, "do-lost", TRUE, NULL);
+  g_object_set (h->element, "do-dtx", TRUE, NULL);
+  next_seqnum = construct_deterministic_initial_state (h, latency_ms);
+
+  /* At this point there is already existing a lost-timer for @next_seqnum,
+   * that will have a timeout of its estimated pts + latency */
+  ts = next_seqnum * TEST_BUF_DURATION;
+
+  /* We crank the clock to time-out the next scheduled timer */
+  gst_harness_crank_single_clock_wait (h);
+  /* check the timeout-time is timestamp + latency */
+  fail_unless_equals_int64 (ts + latency_ms * GST_MSECOND,
+      gst_clock_get_time (GST_ELEMENT_CLOCK (h->element)));
+  /* and that we get a lost event in place of the buffer */
+  verify_lost_event (h, next_seqnum, ts, TEST_BUF_DURATION);
+
+  /* crank again and verify a lost-event for the next buffer is produced */
+  gst_harness_crank_single_clock_wait (h);
+  next_seqnum++;
+  ts = next_seqnum * TEST_BUF_DURATION;
+  /* check the timeout-time is timestamp + latency */
+  fail_unless_equals_int64 (ts + latency_ms * GST_MSECOND,
+      gst_clock_get_time (GST_ELEMENT_CLOCK (h->element)));
+  verify_lost_event (h, next_seqnum, ts, TEST_BUF_DURATION);
+
+  /* then the seqnum that just had a lost-event produced arrives */
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer (next_seqnum)));
+  /* and we should discard it as it is already lost */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h));
+
+  /* now the next seqnum arrives */
+  next_seqnum++;
+  fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
+          generate_test_buffer (next_seqnum)));
+  buf = gst_harness_pull (h);
+  fail_unless_equals_uint64 (next_seqnum * TEST_BUF_DURATION,
+      GST_BUFFER_PTS (buf));
+  fail_unless_equals_int (next_seqnum, get_rtp_seq_num (buf));
+  gst_buffer_unref (buf);
+
+  /* verify that we have pulled out all waiting buffers and events */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h));
+  fail_unless_equals_int (0, gst_harness_events_in_queue (h));
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 rtpjitterbuffer_suite (void)
 {
@@ -3311,6 +3370,7 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_multiple_lost_do_not_stall);
   tcase_add_test (tc_chain, test_reset_using_rtx_packets_does_not_stall);
 
+  tcase_add_test (tc_chain, test_dtx_basics);
 
   return s;
 }
