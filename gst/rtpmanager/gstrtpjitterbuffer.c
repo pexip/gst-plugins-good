@@ -134,6 +134,7 @@ enum
 #define DEFAULT_TS_OFFSET           0
 #define DEFAULT_MAX_TS_OFFSET_ADJUSTMENT 0
 #define DEFAULT_DO_LOST             TRUE
+#define DEFAULT_REORDERED_CONSIDERED_LOST FALSE
 #define DEFAULT_POST_DROP_MESSAGES  FALSE
 #define DEFAULT_DROP_MESSAGES_INTERVAL_MS   200
 #define DEFAULT_MODE                RTP_JITTER_BUFFER_MODE_SLAVE
@@ -166,6 +167,7 @@ enum
   PROP_TS_OFFSET,
   PROP_MAX_TS_OFFSET_ADJUSTMENT,
   PROP_DO_LOST,
+  PROP_REORDERED_CONSIDERED_LOST,
   PROP_POST_DROP_MESSAGES,
   PROP_DROP_MESSAGES_INTERVAL,
   PROP_MODE,
@@ -301,6 +303,7 @@ struct _GstRtpJitterBufferPrivate
   gint64 ts_offset;
   guint64 max_ts_offset_adjustment;
   gboolean do_lost;
+  gboolean reordered_considered_lost;
   gboolean post_drop_messages;
   guint drop_messages_interval_ms;
   gboolean do_retransmission;
@@ -615,6 +618,17 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
   g_object_class_install_property (gobject_class, PROP_DO_LOST,
       g_param_spec_boolean ("do-lost", "Do Lost",
           "Send an event downstream when a packet is lost", DEFAULT_DO_LOST,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /**
+   * GstRtpJitterBuffer:reordered-considered-lost:
+   *
+   * When encountering a gap in sequence-numbers, send a lost even immediately,
+   * instead of waiting in case that packet is reordered.
+   */
+  g_object_class_install_property (gobject_class, PROP_REORDERED_CONSIDERED_LOST,
+      g_param_spec_boolean ("reordered-considered-lost", "Reordered considered lost",
+          "Disable waiting for reordered packets", DEFAULT_REORDERED_CONSIDERED_LOST,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /**
@@ -1029,6 +1043,7 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   priv->ts_offset = DEFAULT_TS_OFFSET;
   priv->max_ts_offset_adjustment = DEFAULT_MAX_TS_OFFSET_ADJUSTMENT;
   priv->do_lost = DEFAULT_DO_LOST;
+  priv->reordered_considered_lost = DEFAULT_REORDERED_CONSIDERED_LOST;
   priv->post_drop_messages = DEFAULT_POST_DROP_MESSAGES;
   priv->drop_messages_interval_ms = DEFAULT_DROP_MESSAGES_INTERVAL_MS;
   priv->do_retransmission = DEFAULT_DO_RETRANSMISSION;
@@ -2458,14 +2473,18 @@ gst_rtp_jitter_buffer_handle_missing_packets (GstRtpJitterBuffer * jitterbuffer,
         GST_TIME_FORMAT " and duration %" GST_TIME_FORMAT,
         GST_TIME_ARGS (est_pts), GST_TIME_ARGS (est_pkt_duration));
 
-    if (total_duration > priv->latency_ns) {
-      GstClockTime gap_dur;
+    if (total_duration > priv->latency_ns || priv->reordered_considered_lost) {
       GstClockTimeDiff gap_time;
       guint lost_packets;
 
-      gap_dur = gap * est_pkt_duration;
-      gap_time = MAX (0, GST_CLOCK_DIFF (priv->latency_ns, gap_dur));
-      lost_packets = gap_time / est_pkt_duration;
+      if (priv->reordered_considered_lost) {
+        gap_time = MAX (0, GST_CLOCK_DIFF (est_pts, pts));
+        lost_packets = gap;
+      } else {
+        GstClockTime gap_dur = gap * est_pkt_duration;
+        gap_time = MAX (0, GST_CLOCK_DIFF (priv->latency_ns, gap_dur));
+        lost_packets = gap_time / est_pkt_duration;
+      }
 
       /* too many lost packets, some of the missing packets are already
        * too late and we can generate lost packet events for them. */
@@ -4551,6 +4570,11 @@ gst_rtp_jitter_buffer_set_property (GObject * object,
       priv->do_lost = g_value_get_boolean (value);
       JBUF_UNLOCK (priv);
       break;
+    case PROP_REORDERED_CONSIDERED_LOST:
+      JBUF_LOCK (priv);
+      priv->reordered_considered_lost = g_value_get_boolean (value);
+      JBUF_UNLOCK (priv);
+      break;
     case PROP_POST_DROP_MESSAGES:
       JBUF_LOCK (priv);
       priv->post_drop_messages = g_value_get_boolean (value);
@@ -4687,6 +4711,11 @@ gst_rtp_jitter_buffer_get_property (GObject * object,
     case PROP_DO_LOST:
       JBUF_LOCK (priv);
       g_value_set_boolean (value, priv->do_lost);
+      JBUF_UNLOCK (priv);
+      break;
+    case PROP_REORDERED_CONSIDERED_LOST:
+      JBUF_LOCK (priv);
+      g_value_set_boolean (value, priv->reordered_considered_lost);
       JBUF_UNLOCK (priv);
       break;
     case PROP_POST_DROP_MESSAGES:
