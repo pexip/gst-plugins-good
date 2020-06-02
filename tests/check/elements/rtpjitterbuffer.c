@@ -911,11 +911,9 @@ GST_START_TEST (test_late_packets_still_makes_lost_events)
               seqnum, seqnum * TEST_RTP_TS_DURATION)));
 
   /* we should now receive packet-lost-events for the gap
-   * FIXME: The timeout and duration here are a bit crap...
    */
   verify_lost_event (h, next_seqnum, 3400 * GST_MSECOND, 6500 * GST_MSECOND);
-  verify_lost_event (h, next_seqnum + 1,
-      9900 * GST_MSECOND, 3300 * GST_MSECOND);
+  verify_lost_event (h, next_seqnum + 1, 9900 * GST_MSECOND, 100 * GST_MSECOND);
 
   /* verify that packet @seqnum made it through! */
   out_buf = gst_harness_pull (h);
