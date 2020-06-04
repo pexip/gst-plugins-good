@@ -3440,7 +3440,8 @@ GST_START_TEST (test_dtx_reordering)
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
           generate_test_buffer (seqnum + 1)));
 
-  /* immediately a lost event for the previous seqnum arrives */
+  /* immediately a lost event for the previous seqnum arrives,
+     as DTX disables the jitterbuffers reordering-capabilites */
   verify_lost_event (h, seqnum,
       seqnum * TEST_BUF_DURATION, 1 * TEST_BUF_DURATION);
 
