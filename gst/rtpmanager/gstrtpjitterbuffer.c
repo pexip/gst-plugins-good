@@ -149,8 +149,6 @@ enum
 #define DEFAULT_RTX_MAX_RETRIES    -1
 #define DEFAULT_RTX_DEADLINE       -1
 #define DEFAULT_RTX_STATS_TIMEOUT   1000
-#define DEFAULT_DO_DTX              TRUE
-#define DEFAULT_DTX_DURATION        20 * GST_MSECOND
 #define DEFAULT_MAX_RTCP_RTP_TIME_DIFF 1000
 #define DEFAULT_MAX_DROPOUT_TIME    60000
 #define DEFAULT_MAX_MISORDER_TIME   2000
@@ -316,7 +314,6 @@ struct _GstRtpJitterBufferPrivate
   gint rtx_max_retries;
   guint rtx_stats_timeout;
   gint rtx_deadline_ms;
-  gboolean do_dtx;
   guint64 dtx_duration;
   gint max_rtcp_rtp_time_diff;
   guint32 max_dropout_time;
@@ -951,7 +948,7 @@ gst_rtp_jitter_buffer_class_init (GstRtpJitterBufferClass * klass)
    * GstRtpJitterBuffer::on-npt-stop:
    * @buffer: the object which received the signal
    *
-   * Signal that the jitterbufer has pushed the RTP packet that corresponds to
+   * Signal that the jitterbuffer has pushed the RTP packet that corresponds to
    * the npt-stop position.
    */
   gst_rtp_jitter_buffer_signals[SIGNAL_ON_NPT_STOP] =
@@ -1076,6 +1073,8 @@ gst_rtp_jitter_buffer_init (GstRtpJitterBuffer * jitterbuffer)
   rtp_jitter_buffer_set_delay (priv->jbuf, priv->latency_ns);
   rtp_jitter_buffer_set_buffering (priv->jbuf, FALSE);
   priv->active = TRUE;
+
+  priv->dtx_duration = GST_CLOCK_TIME_NONE;
 
   priv->srcpad =
       gst_pad_new_from_static_template (&gst_rtp_jitter_buffer_src_template,
@@ -1560,10 +1559,13 @@ gst_jitter_buffer_sink_parse_caps (GstRtpJitterBuffer * jitterbuffer,
     rtp_jitter_buffer_set_media_clock (priv->jbuf, NULL, -1);
   }
 
-  if (gst_structure_get_clock_time (caps_struct, "dtx-duration", &tval))
-   priv->dtx_duration = tval;
- else
-   priv->dtx_duration = GST_CLOCK_TIME_NONE;
+  if (gst_structure_get_clock_time (caps_struct, "dtx-duration", &tval)) {
+    priv->dtx_duration = tval;
+    GST_DEBUG_OBJECT (jitterbuffer, "Setting dtx-duration to %"GST_TIME_FORMAT,
+        GST_TIME_ARGS (priv->dtx_duration));
+  } else {
+    priv->dtx_duration = GST_CLOCK_TIME_NONE;
+  }
 
   return TRUE;
 
@@ -2672,7 +2674,10 @@ update_dtx_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
       GST_TIME_ARGS (pts), GST_TIME_ARGS (duration));
 
   next_expected_pts = pts + duration;
-  offset = duration * 1.5; /* we set the timeout at two whole durations */
+  /* we set the offset (the extra time to wait before pushing a gap-event)
+     to the MIN of the jitterbuffer-latency and 1.5 times the dtx-duration */
+  offset = timeout_offset (jitterbuffer);
+  offset = MIN (offset, duration * 1.5);
   next_seqnum = priv->next_in_seqnum;
 
   if (timer) {
@@ -3336,7 +3341,7 @@ gst_rtp_jitter_buffer_chain (GstPad * pad, GstObject * parent,
   if (priv->do_retransmission)
     update_rtx_timers (jitterbuffer, seqnum, dts, pts, do_next_seqnum, is_rtx,
         timer);
-  else if (priv->do_dtx)
+  else if (GST_CLOCK_TIME_IS_VALID (priv->dtx_duration))
     update_dtx_timer (jitterbuffer, seqnum, pts, do_next_seqnum, timer);
 
   /* we had an unhandled SR, handle it now */

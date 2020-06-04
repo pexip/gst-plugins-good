@@ -3300,6 +3300,7 @@ GST_START_TEST (test_dtx_generate_gaps_when_waiting)
   GstClockTime ts, now;
   guint tick;
   gint latency_ms = __i__ * 20 + 20;
+  GstClockTime expected_offset = MIN (latency_ms * GST_MSECOND, TEST_BUF_DURATION * 1.5);
 
   tick = construct_deterministic_initial_state_for_dtx (h, latency_ms);
 
@@ -3309,7 +3310,7 @@ GST_START_TEST (test_dtx_generate_gaps_when_waiting)
   gst_harness_crank_single_clock_wait (h);
   /* check the timeout-time is timestamp + latency */
   now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
-  fail_unless_equals_int64 (ts + latency_ms * GST_MSECOND, now);
+  fail_unless_equals_int64 (ts + expected_offset, now);
 
   /* and that we get a gap event in place of the buffer */
   verify_gap_event (h, ts, TEST_BUF_DURATION);
@@ -3320,7 +3321,7 @@ GST_START_TEST (test_dtx_generate_gaps_when_waiting)
   gst_harness_crank_single_clock_wait (h);
   /* check the timeout-time is timestamp + latency */
   now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
-  fail_unless_equals_int64 (ts + latency_ms * GST_MSECOND, now);
+  fail_unless_equals_int64 (ts + expected_offset, now);
 
   verify_gap_event (h, ts, TEST_BUF_DURATION);
 
@@ -3378,7 +3379,6 @@ GST_START_TEST (test_dtx_with_lost_packet)
   GstHarness *h = gst_harness_new ("rtpjitterbuffer");
   GstBuffer *buf;
   GstClockTime ts;
-  GstClockTime now;
   guint16 seqnum;
   guint tick;
   guint32 rtp_ts;
@@ -3399,13 +3399,8 @@ GST_START_TEST (test_dtx_with_lost_packet)
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
           generate_test_buffer_full (ts, seqnum, rtp_ts)));
 
-  /* we crank to expire the timer waiting for the missing packet */
-  gst_harness_crank_single_clock_wait (h);
-  now = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
-  fail_unless_equals_int64 (
-    (seqnum - 1) * TEST_BUF_DURATION + latency_ms * GST_MSECOND, now);
-
-  /* this lost event contains the duration of the 3 ticks */
+  /* this lost event contains the duration of the 3 ticks,
+     and is pushed immediately */
   verify_lost_event (h, (seqnum - 1),
       (seqnum - 1) * TEST_BUF_DURATION, 3 * TEST_BUF_DURATION);
 
@@ -3414,7 +3409,10 @@ GST_START_TEST (test_dtx_with_lost_packet)
   fail_unless_equals_int (seqnum, get_rtp_seq_num (buf));
   gst_buffer_unref (buf);
 
-  /* we crank again to verify the dtx-timer is back in action */
+  /* first crank to wake up the gap-generation for #6,
+     that is now removed */
+  gst_harness_crank_single_clock_wait (h);
+  /* second crank to get the next gap-event out */
   gst_harness_crank_single_clock_wait (h);
   verify_gap_event (h, (tick + 1) * TEST_BUF_DURATION, TEST_BUF_DURATION);
 
@@ -3430,7 +3428,7 @@ GST_END_TEST;
 GST_START_TEST (test_dtx_reordering)
 {
   GstHarness *h = gst_harness_new ("rtpjitterbuffer");
-  //GstBuffer *buf;
+  GstBuffer *buf;
   guint16 seqnum;
   gint latency_ms = 100;
 
@@ -3442,14 +3440,18 @@ GST_START_TEST (test_dtx_reordering)
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
           generate_test_buffer (seqnum + 1)));
 
+  /* immediately a lost event for the previous seqnum arrives */
+  verify_lost_event (h, seqnum,
+      seqnum * TEST_BUF_DURATION, 1 * TEST_BUF_DURATION);
+
   /* and then its previous one */
   fail_unless_equals_int (GST_FLOW_OK, gst_harness_push (h,
           generate_test_buffer (seqnum)));
 
-  /* we crank again to verify the dtx-timer */
-
-  gst_buffer_unref (gst_harness_pull (h));
-  gst_buffer_unref (gst_harness_pull (h));
+  /* the buffer immediately follows */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_int (seqnum + 1, get_rtp_seq_num (buf));
+  gst_buffer_unref (buf);
 
   gst_harness_crank_single_clock_wait (h);
   gst_harness_crank_single_clock_wait (h);
@@ -3469,9 +3471,6 @@ GST_START_TEST (test_dtx_no_fractional_lost_event_durations)
   GstHarness *h = gst_harness_new ("rtpjitterbuffer");
   GstClockTime now;
   guint16 seqnum;
-  guint16 exp_seqnum;
-  GstClockTime exp_pts;
-  GstClockTime exp_dur;
   gint latency_ms = 100;
 
   g_object_set (h->element, "do-lost", TRUE, NULL);
@@ -3485,26 +3484,11 @@ GST_START_TEST (test_dtx_no_fractional_lost_event_durations)
           generate_test_buffer_full (now,
               seqnum + 3, (seqnum + 4) * TEST_RTP_TS_DURATION)));
 
-  /* We have 80ms to divide between 3 lost-events.
-     The first one will have 40 and the two others will have 20 each */
-  gst_harness_crank_single_clock_wait (h);
-  exp_seqnum = seqnum;
-  exp_pts = seqnum * TEST_BUF_DURATION;
-  exp_dur = TEST_BUF_DURATION * 2;
-  verify_lost_event (h, exp_seqnum, exp_pts, exp_dur);
+  /* We immediately get a lost event for the missing duration */
+  verify_lost_event (h, seqnum,
+      seqnum * TEST_BUF_DURATION, 4 * TEST_BUF_DURATION);
 
-  gst_harness_crank_single_clock_wait (h);
-  exp_seqnum++;
-  exp_pts += exp_dur;
-  exp_dur = TEST_BUF_DURATION;
-  verify_lost_event (h, exp_seqnum, exp_pts, exp_dur);
-
-  gst_harness_crank_single_clock_wait (h);
-  exp_seqnum++;
-  exp_pts += exp_dur;
-  exp_dur = TEST_BUF_DURATION;
-  verify_lost_event (h, exp_seqnum, exp_pts, exp_dur);
-
+  /* followed by the buffer */
   gst_buffer_unref (gst_harness_pull (h));
   /* verify that we have pulled out all waiting buffers and events */
   fail_unless_equals_int (0, gst_harness_buffers_in_queue (h));
