@@ -2666,6 +2666,11 @@ update_dtx_timer (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 
     GST_DEBUG_OBJECT (jitterbuffer, "Diff %" GST_STIME_FORMAT " gives %d gaps",
         GST_STIME_ARGS (diff), gaps);
+
+    /* TEMP: assert when producing lots of gaps */
+    if (gaps > 50)
+      g_assert_not_reached ();
+
     /* we need to prepend them to get them out before the buffer they preceed,
        and hence we need to insert in reverse order */
     for (i = 0; i < gaps; i++) {
