@@ -3502,6 +3502,28 @@ GST_START_TEST (test_dtx_no_fractional_lost_event_durations)
 GST_END_TEST;
 
 
+GST_START_TEST (test_dtx_without_clock)
+{
+  GstHarness *h = gst_harness_new ("rtpjitterbuffer");
+  guint i;
+
+  g_object_set (h->element, "latency", 20, NULL);
+  gst_harness_set_src_caps (h, generate_dtx_caps ());
+  gst_harness_use_systemclock (h);
+
+  push_test_buffer_now (h, 0, 0, FALSE);
+  for (i = 0; i < 50; i++)
+    gst_event_unref (gst_harness_pull_event (h));
+
+  gst_element_set_clock (h->element, NULL);
+  g_usleep (G_USEC_PER_SEC / 10);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 rtpjitterbuffer_suite (void)
 {
@@ -3582,6 +3604,7 @@ rtpjitterbuffer_suite (void)
   tcase_add_test (tc_chain, test_dtx_with_lost_packet);
   tcase_add_test (tc_chain, test_dtx_reordering);
   tcase_add_test (tc_chain, test_dtx_no_fractional_lost_event_durations);
+  tcase_add_test (tc_chain, test_dtx_without_clock);
 
   return s;
 }
