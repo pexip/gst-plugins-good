@@ -4235,10 +4235,9 @@ wait_next_timeout (GstRtpJitterBuffer * jitterbuffer)
       if (!clock) {
         GST_OBJECT_UNLOCK (jitterbuffer);
         /* let's just push if there is no clock */
-        GST_DEBUG_OBJECT (jitterbuffer, "No clock, timeout right away");
-        now = timer->timeout;
+        GST_DEBUG_OBJECT (jitterbuffer, "No clock, timeout right away then stop");
         push_rtx_events (jitterbuffer, &events);
-        continue;
+        goto stopping;
       }
 
       /* prepare for sync against clock */
