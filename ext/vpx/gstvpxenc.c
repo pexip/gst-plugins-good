@@ -702,7 +702,7 @@ gst_vpx_enc_init (GstVPXEnc * gst_vpx_enc)
 
   gst_vpx_enc->cfg.rc_end_usage = DEFAULT_RC_END_USAGE;
   gst_vpx_enc->cfg.rc_target_bitrate = DEFAULT_RC_TARGET_BITRATE / 1000;
-  gst_vpx_enc->rc_target_bitrate_auto = DEFAULT_RC_TARGET_BITRATE == 0;
+  gst_vpx_enc->rc_target_bitrate_auto = FALSE;
   gst_vpx_enc->cfg.rc_min_quantizer = DEFAULT_RC_MIN_QUANTIZER;
   gst_vpx_enc->cfg.rc_max_quantizer = DEFAULT_RC_MAX_QUANTIZER;
   gst_vpx_enc->cfg.rc_dropframe_thresh = DEFAULT_RC_DROPFRAME_THRESH;
