@@ -2340,6 +2340,7 @@ static gboolean
 gst_vpx_enc_transform_meta (GstVideoEncoder * encoder,
     GstVideoCodecFrame * frame, GstMeta * meta)
 {
+  const GstMetaInfo *roi_info = GST_VIDEO_REGION_OF_INTEREST_META_INFO;
   const GstMetaInfo *info = meta->info;
   const gchar *const *tags;
 
@@ -2347,7 +2348,9 @@ gst_vpx_enc_transform_meta (GstVideoEncoder * encoder,
   if (info != GST_VIDEO_VP8_META_INFO) {
    tags = gst_meta_api_type_get_tags (info->api);
 
-    if (!tags || (g_strv_length ((gchar **) tags) == 1
+    if (!tags
+        || info->api == roi_info->api
+        || (g_strv_length ((gchar **) tags) == 1
             && gst_meta_api_type_has_tag (info->api, META_TAG_VIDEO)))
       return TRUE;
   }
