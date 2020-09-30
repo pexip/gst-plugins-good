@@ -120,6 +120,7 @@
 #include "gstrtpreddec.h"
 #include "gstrtpredenc.h"
 #include "gstrtpstorage.h"
+#include "gstrtphdrext-roi.h"
 
 static gboolean
 plugin_init (GstPlugin * plugin)
@@ -421,6 +422,10 @@ plugin_init (GstPlugin * plugin)
 
   if (!gst_element_register (plugin, "rtpstorage", GST_RANK_NONE,
           GST_TYPE_RTP_STORAGE))
+    return FALSE;
+
+  if (!gst_element_register (plugin, "rtphdrextroi",
+          GST_RANK_MARGINAL, GST_TYPE_RTP_HEADER_EXTENSION_ROI))
     return FALSE;
 
   return TRUE;

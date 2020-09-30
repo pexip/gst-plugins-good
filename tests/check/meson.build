@@ -88,6 +88,7 @@ good_tests = [
   [ 'elements/rtpulpfec' ],
   [ 'elements/rtpssrcdemux' ],
   [ 'elements/rtp-payloading' ],
+  [ 'elements/rtp-roi', false, [gstrtp_dep, gstvide_dep] ],
   [ 'elements/spectrum', false, [gstfft_dep] ],
   [ 'elements/shapewipe' ],
   [ 'elements/udpsink' ],

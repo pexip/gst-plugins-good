@@ -102,6 +102,7 @@ rtp_sources = [
   'rtpstorage.c',
   'rtpstoragestream.c',
   'gstrtpstorage.c',
+  'gstrtphdrext-roi.c',
 ]
 
 rtp_args = [
