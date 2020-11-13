@@ -1782,7 +1782,7 @@ check_collision (RTPSession * sess, RTPSource * source,
       }
     } else {
       /* We don't already have a from address for RTP, just set it */
-      if ( (from == NULL) || !__g_socket_address_equal (from, pinfo->address)) {
+      if ((from == NULL) || !__g_socket_address_equal (from, pinfo->address)) {
         if (rtp)
           rtp_source_set_rtp_from (source, pinfo->address);
         else
@@ -3445,13 +3445,15 @@ rtp_session_send_rtp (RTPSession * sess, gpointer data, gboolean is_list,
         GST_DEBUG ("Collision for SSRC %x, change our sender ssrc", pinfo.ssrc);
 
         rtp_session_have_conflict (sess, source, from, current_time);
-
-        goto collision;
       }
     } else {
       GST_LOG ("Ignoring collision on sent SSRC %x because remote source"
           " doesn't have an address", pinfo.ssrc);
     }
+
+    /* the the sending source is not internal, we have to drop the packet,
+       or else we will end up receving it ourselves! */
+    goto collision;
   }
 
   prevsender = RTP_SOURCE_IS_SENDER (source);
