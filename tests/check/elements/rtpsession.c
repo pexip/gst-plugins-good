@@ -3392,11 +3392,11 @@ GST_START_TEST (test_twcc_huge_seqnum_gap)
   twcc_push_packets (h, packets);
 
   session_harness_produce_rtcp (h, 1);
-
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci0);
   gst_buffer_unref (buf);
 
+  session_harness_produce_rtcp (h, 1);
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci1);
   gst_buffer_unref (buf);
@@ -3445,11 +3445,11 @@ GST_START_TEST (test_twcc_duplicate_seqnums)
   twcc_push_packets (h, packets);
 
   session_harness_produce_rtcp (h, 1);
-
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci0);
   gst_buffer_unref (buf);
 
+  session_harness_produce_rtcp (h, 1);
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci1);
   gst_buffer_unref (buf);
@@ -3515,15 +3515,16 @@ GST_START_TEST (test_twcc_multiple_markers)
 
   /* we should get 1 SR/RR, and then 3x TWCC packets */
   session_harness_produce_rtcp (h, 1);
-
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci0);
   gst_buffer_unref (buf);
 
+  session_harness_produce_rtcp (h, 1);
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci1);
   gst_buffer_unref (buf);
 
+  session_harness_produce_rtcp (h, 1);
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci2);
   gst_buffer_unref (buf);
@@ -3550,9 +3551,7 @@ GST_START_TEST (test_twcc_no_marker_and_gaps)
 
   /* verify we did receive some feedback for these packets */
   session_harness_produce_rtcp (h, 1);
-  for (i = 0; i < 2; i++) {
-    gst_buffer_unref (session_harness_pull_twcc_rtcp (h));
-  }
+  gst_buffer_unref (session_harness_pull_twcc_rtcp (h));
 
   session_harness_free (h);
 }
@@ -3797,6 +3796,8 @@ GST_START_TEST (test_twcc_recv_packets_reordered)
   twcc_verify_fci (buf, exp_fci0);
   gst_buffer_unref (buf);
 
+  session_harness_produce_rtcp (h, 1);
+
   buf = session_harness_pull_twcc_rtcp (h);
   twcc_verify_fci (buf, exp_fci1);
   gst_buffer_unref (buf);
@@ -3843,10 +3844,15 @@ GST_START_TEST (test_twcc_recv_rtcp_reordered)
   twcc_push_packets (recv_h, packets);
 
   session_harness_produce_rtcp (recv_h, 1);
-
   buf[0] = session_harness_pull_twcc_rtcp (recv_h);
+
+  session_harness_produce_rtcp (recv_h, 1);
   buf[1] = session_harness_pull_twcc_rtcp (recv_h);
+
+  session_harness_produce_rtcp (recv_h, 1);
   buf[2] = session_harness_pull_twcc_rtcp (recv_h);
+
+  session_harness_produce_rtcp (recv_h, 1);
   buf[3] = session_harness_pull_twcc_rtcp (recv_h);
 
   /* reorder the twcc-feedback */
