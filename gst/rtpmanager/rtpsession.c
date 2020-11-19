@@ -83,6 +83,7 @@ enum
 #define DEFAULT_RTCP_REDUCED_SIZE    FALSE
 #define DEFAULT_RTCP_DISABLE_SR_TIMESTAMP FALSE
 #define DEFAULT_STATS_NOTIFY_MIN_INTERVAL   0
+#define DEFAULT_TWCC_FEEDBACK_INTERVAL GST_CLOCK_TIME_NONE
 
 enum
 {
@@ -110,7 +111,8 @@ enum
   PROP_STATS_NOTIFY_MIN_INTERVAL,
   PROP_RTP_PROFILE,
   PROP_RTCP_REDUCED_SIZE,
-  PROP_RTCP_DISABLE_SR_TIMESTAMP
+  PROP_RTCP_DISABLE_SR_TIMESTAMP,
+  PROP_TWCC_FEEDBACK_INTERVAL,
 };
 
 /* update average packet size */
@@ -716,6 +718,23 @@ rtp_session_class_init (RTPSessionClass * klass)
           DEFAULT_RTCP_DISABLE_SR_TIMESTAMP,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  /**
+   * RTPSession::twcc-feedback-interval:
+   *
+   * The interval to send TWCC reports on.
+   * This overrides the default behavior of sending reports
+   * based on marker-bits.
+   *
+   * Since: 1.20
+   */
+  g_object_class_install_property (gobject_class,
+      PROP_TWCC_FEEDBACK_INTERVAL,
+      g_param_spec_uint64 ("twcc-feedback-interval",
+          "TWCC Feedback Interval",
+          "The interval to send TWCC reports on",
+          0, G_MAXUINT64, DEFAULT_TWCC_FEEDBACK_INTERVAL,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   klass->get_source_by_ssrc =
       GST_DEBUG_FUNCPTR (rtp_session_get_source_by_ssrc);
   klass->send_rtcp = GST_DEBUG_FUNCPTR (rtp_session_send_rtcp);
@@ -1005,6 +1024,10 @@ rtp_session_set_property (GObject * object, guint prop_id,
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       sess->timestamp_sender_reports = !g_value_get_boolean (value);
       break;
+    case PROP_TWCC_FEEDBACK_INTERVAL:
+      rtp_twcc_manager_set_feedback_interval (sess->twcc,
+          g_value_get_uint64 (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1092,6 +1115,10 @@ rtp_session_get_property (GObject * object, guint prop_id,
       break;
     case PROP_RTCP_DISABLE_SR_TIMESTAMP:
       g_value_set_boolean (value, !sess->timestamp_sender_reports);
+      break;
+    case PROP_TWCC_FEEDBACK_INTERVAL:
+      g_value_set_uint64 (value,
+          rtp_twcc_manager_get_feedback_interval (sess->twcc));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
