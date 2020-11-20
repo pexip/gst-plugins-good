@@ -812,6 +812,7 @@ rtp_session_init (RTPSession * sess)
   sess->last_rtcp_interval = GST_CLOCK_TIME_NONE;
 
   sess->next_early_rtcp_time = GST_CLOCK_TIME_NONE;
+  sess->next_twcc_rtcp_time = GST_CLOCK_TIME_NONE;
   sess->rtcp_feedback_retention_window = DEFAULT_RTCP_FEEDBACK_RETENTION_WINDOW;
   sess->rtcp_immediate_feedback_threshold =
       DEFAULT_RTCP_IMMEDIATE_FEEDBACK_THRESHOLD;
@@ -1287,6 +1288,7 @@ rtp_session_reset (RTPSession * sess)
   sess->last_rtcp_send_time = GST_CLOCK_TIME_NONE;
   sess->last_rtcp_interval = GST_CLOCK_TIME_NONE;
   sess->next_early_rtcp_time = GST_CLOCK_TIME_NONE;
+  sess->next_twcc_rtcp_time = GST_CLOCK_TIME_NONE;
   sess->scheduled_bye = FALSE;
 
   /* reset session stats */
@@ -3689,15 +3691,27 @@ rtp_session_schedule_bye (RTPSession * sess, GstClockTime current_time)
 GstClockTime
 rtp_session_next_timeout (RTPSession * sess, GstClockTime current_time)
 {
-  GstClockTime result, interval = 0;
+  GstClockTime result, early_time, interval = 0;
 
   g_return_val_if_fail (RTP_IS_SESSION (sess), GST_CLOCK_TIME_NONE);
 
   RTP_SESSION_LOCK (sess);
 
-  if (GST_CLOCK_TIME_IS_VALID (sess->next_early_rtcp_time)) {
+  /* Take min(twcc-time, next-early-rtcp-time) if both are valid */
+  sess->next_twcc_rtcp_time = GST_CLOCK_TIME_NONE;
+  early_time = rtp_twcc_manager_get_next_timeout (sess->twcc, current_time);
+  if (GST_CLOCK_TIME_IS_VALID (early_time)) {
+    if (GST_CLOCK_TIME_IS_VALID (sess->next_early_rtcp_time) &&
+        sess->next_early_rtcp_time < early_time)
+      early_time = sess->next_early_rtcp_time;
+    else
+      sess->next_twcc_rtcp_time = early_time;
+  } else
+    early_time = sess->next_early_rtcp_time;
+
+  if (GST_CLOCK_TIME_IS_VALID (early_time)) {
     GST_DEBUG ("have early rtcp time");
-    result = sess->next_early_rtcp_time;
+    result = early_time;
     goto early_exit;
   }
 
@@ -3793,6 +3807,7 @@ typedef struct
   GstRTCPPacket packet;
   gboolean has_sdes;
   gboolean is_early;
+  gboolean is_twcc;
   gboolean may_suppress;
   GQueue output;
   guint nacked_seqnums;
@@ -3809,6 +3824,9 @@ session_start_rtcp (RTPSession * sess, ReportData * data)
   data->has_sdes = FALSE;
 
   gst_rtcp_buffer_map (data->rtcp, GST_MAP_READWRITE, rtcp);
+
+  if (data->is_twcc)
+    return FALSE;
 
   if (data->is_early && sess->reduced_size_rtcp)
     return FALSE;
@@ -4278,6 +4296,9 @@ session_sdes (RTPSession * sess, ReportData * data)
   gint i, n_fields;
   GstRTCPBuffer *rtcp = &data->rtcpbuf;
 
+  if (data->is_twcc)
+    return;
+
   /* add SDES packet */
   gst_rtcp_buffer_add_packet (rtcp, GST_RTCP_TYPE_SDES, packet);
 
@@ -4366,15 +4387,27 @@ is_rtcp_time (RTPSession * sess, GstClockTime current_time, ReportData * data)
   else
     stats = &sess->stats;
 
-  if (GST_CLOCK_TIME_IS_VALID (sess->next_early_rtcp_time))
+  if (GST_CLOCK_TIME_IS_VALID (sess->next_early_rtcp_time) &&
+      sess->next_early_rtcp_time <= current_time)
     data->is_early = TRUE;
   else
     data->is_early = FALSE;
+
+  if (GST_CLOCK_TIME_IS_VALID (sess->next_twcc_rtcp_time) &&
+      sess->next_twcc_rtcp_time <= current_time)
+    data->is_twcc = TRUE;
+  else
+    data->is_twcc = FALSE;
 
   if (data->is_early && sess->next_early_rtcp_time <= current_time) {
     GST_DEBUG ("early feedback %" GST_TIME_FORMAT " <= now %"
         GST_TIME_FORMAT, GST_TIME_ARGS (sess->next_early_rtcp_time),
         GST_TIME_ARGS (current_time));
+  } else if (data->is_twcc && sess->next_twcc_rtcp_time <= current_time) {
+    GST_DEBUG ("twcc feedback %" GST_TIME_FORMAT " <= now %"
+        GST_TIME_FORMAT, GST_TIME_ARGS (sess->next_twcc_rtcp_time),
+        GST_TIME_ARGS (current_time));
+    return TRUE;
   } else if (sess->next_rtcp_check_time == GST_CLOCK_TIME_NONE ||
       sess->next_rtcp_check_time > current_time) {
     GST_DEBUG ("no check time yet, next %" GST_TIME_FORMAT " > now %"
@@ -4516,7 +4549,8 @@ generate_twcc (const gchar * key, RTPSource * source, ReportData * data)
     return;
   }
 
-  while ((buf = rtp_twcc_manager_get_feedback (sess->twcc, source->ssrc))) {
+  while ((buf = rtp_twcc_manager_get_feedback (sess->twcc, source->ssrc,
+      data->current_time))) {
     ReportOutput *output = g_slice_new (ReportOutput);
     output->source = g_object_ref (source);
     output->is_bye = FALSE;
@@ -4554,7 +4588,7 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
   /* open packet */
   is_sr_rr = session_start_rtcp (sess, data);
 
-  if (source->marked_bye) {
+  if (source->marked_bye && !data->is_twcc) {
     /* send BYE */
     make_source_bye (sess, source, data);
     is_bye = TRUE;
@@ -4569,17 +4603,17 @@ generate_rtcp (const gchar * key, RTPSource * source, ReportData * data)
     g_signal_emit (sess, rtp_session_signals[SIGNAL_ON_CREATING_SR_RR], 0,
         source, &data->packet);
   }
-  if (!data->has_sdes && (!data->is_early || !sess->reduced_size_rtcp))
+  if (!data->has_sdes && (!data->is_twcc || !data->is_early || !sess->reduced_size_rtcp))
     session_sdes (sess, data);
 
-  if (data->have_fir)
+  if (data->have_fir && !data->is_twcc)
     session_fir (sess, data);
 
-  if (data->have_pli)
+  if (data->have_pli && !data->is_twcc)
     g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
         (GHFunc) session_pli, data);
 
-  if (data->have_nack)
+  if (data->have_nack && !data->is_twcc)
     g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
         (GHFunc) session_nack, data);
 
