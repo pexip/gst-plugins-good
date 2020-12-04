@@ -48,6 +48,8 @@ typedef struct
   GstSegment segment;
 
   gboolean priority;
+  guint16 last_seqnum;          /* protected by object lock */
+  gint64 last_ssrc;
 } GstRTPMuxPadPrivate;
 
 
@@ -71,6 +73,7 @@ struct _GstRTPMux
   guint ssrc;
   guint current_ssrc;
   gboolean have_ssrc;
+  gboolean maintain_seqnum_gap;
 
   GstPad *last_pad; /* protected by object lock */
 

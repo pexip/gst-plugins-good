@@ -313,7 +313,7 @@ GST_START_TEST (test_rtpdtmfmux_lock)
 GST_END_TEST;
 
 static GstBuffer *
-generate_test_buffer (guint seq_num, guint ssrc)
+generate_test_buffer (guint16 seq_num, guint ssrc)
 {
   GstBuffer *buf;
   guint8 *payload;
@@ -358,6 +358,17 @@ _rtp_buffer_get_ts (GstBuffer * buf)
   guint32 ret;
   g_assert (gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp));
   ret = gst_rtp_buffer_get_timestamp (&rtp);
+  gst_rtp_buffer_unmap (&rtp);
+  return ret;
+}
+
+static guint16
+_rtp_buffer_get_seqnum (GstBuffer * buf)
+{
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  guint16 ret;
+  g_assert (gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp));
+  ret = gst_rtp_buffer_get_seq (&rtp);
   gst_rtp_buffer_unmap (&rtp);
   return ret;
 }
@@ -691,6 +702,45 @@ GST_START_TEST (test_rtpmux_ts_offset_downstream_overrules_upstream)
 
 GST_END_TEST;
 
+GST_START_TEST (test_rtpmux_maintain_seqnum_gap)
+{
+  static const guint16 sinkpad_seqnum_base[2] = { 1000, 65534 };
+  GstHarness *h = gst_harness_new_with_padnames ("rtpmux", "sink_0", "src");
+  GstBuffer *buf0;
+  GstBuffer *buf1;
+  guint16 buf0seq, buf1seq;
+  gint seq_gap;
+
+  g_object_set (h->element, "maintain-seqnum-gap", TRUE, NULL);
+  gst_harness_set_src_caps_str (h, "application/x-rtp");
+
+  /* push a buffer with rtp-ssrc=10, rtp-seqnum=1000 */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h, generate_test_buffer (sinkpad_seqnum_base[__i__],
+              10)));
+  /* push a buffer with rtp-ssrc=10, rtp-seqnum=1004 */
+  fail_unless_equals_int (GST_FLOW_OK,
+      gst_harness_push (h, generate_test_buffer (sinkpad_seqnum_base[__i__] + 4,
+              10)));
+
+  buf0 = gst_harness_pull (h);
+  buf1 = gst_harness_pull (h);
+
+  /* We expect the buffers to have the same sequence number gap as
+   * input RTP stream had */
+  buf0seq = _rtp_buffer_get_seqnum (buf0);
+  buf1seq = _rtp_buffer_get_seqnum (buf1);
+  seq_gap = gst_rtp_buffer_compare_seqnum (buf0seq, buf1seq);
+  fail_unless_equals_int (4, seq_gap);
+
+  gst_buffer_unref (buf0);
+  gst_buffer_unref (buf1);
+
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
 static Suite *
 rtpmux_suite (void)
 {
@@ -713,6 +763,8 @@ rtpmux_suite (void)
       test_rtpmux_caps_query_with_downsteam_ts_offset_and_ssrc);
   tcase_add_test (tc_chain,
       test_rtpmux_ts_offset_downstream_overrules_upstream);
+
+  tcase_add_loop_test (tc_chain, test_rtpmux_maintain_seqnum_gap, 0, 2);
 
   tc_chain = tcase_create ("rtpdtmfmux_basic");
   tcase_add_test (tc_chain, test_rtpdtmfmux_basic);

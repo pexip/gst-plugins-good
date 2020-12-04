@@ -67,12 +67,14 @@ enum
   PROP_TIMESTAMP_OFFSET,
   PROP_SEQNUM_OFFSET,
   PROP_SEQNUM,
-  PROP_SSRC
+  PROP_SSRC,
+  PROP_MAINTAIN_SEQ_NUM_GAP,
 };
 
-#define DEFAULT_TIMESTAMP_OFFSET -1
-#define DEFAULT_SEQNUM_OFFSET    -1
-#define DEFAULT_SSRC             -1
+#define DEFAULT_TIMESTAMP_OFFSET     -1
+#define DEFAULT_SEQNUM_OFFSET        -1
+#define DEFAULT_SSRC                 -1
+#define DEFAULT_MAINTAIN_SEQ_NUM_GAP FALSE
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
@@ -158,6 +160,13 @@ gst_rtp_mux_class_init (GstRTPMuxClass * klass)
           0, G_MAXUINT, DEFAULT_SSRC,
           GST_PARAM_MUTABLE_PLAYING | G_PARAM_READWRITE |
           G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (G_OBJECT_CLASS (klass),
+      PROP_MAINTAIN_SEQ_NUM_GAP, g_param_spec_boolean ("maintain-seqnum-gap",
+          "Maintain seqnum gap",
+          "When input rtp stream noncontinuous, reflect sequence number gaps in output stream",
+          DEFAULT_MAINTAIN_SEQ_NUM_GAP,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
 
   gstelement_class->request_new_pad =
       GST_DEBUG_FUNCPTR (gst_rtp_mux_request_new_pad);
@@ -269,6 +278,7 @@ gst_rtp_mux_init (GstRTPMux * rtp_mux)
   rtp_mux->current_ssrc = DEFAULT_SSRC;
   rtp_mux->ts_offset = DEFAULT_TIMESTAMP_OFFSET;
   rtp_mux->seqnum_offset = DEFAULT_SEQNUM_OFFSET;
+  rtp_mux->maintain_seqnum_gap = DEFAULT_MAINTAIN_SEQ_NUM_GAP;
 
   rtp_mux->last_stop = GST_CLOCK_TIME_NONE;
 }
@@ -287,6 +297,7 @@ gst_rtp_mux_setup_sinkpad (GstRTPMux * rtp_mux, GstPad * sinkpad)
   gst_pad_set_query_function (sinkpad,
       GST_DEBUG_FUNCPTR (gst_rtp_mux_sink_query));
 
+  padpriv->last_ssrc = -1;
 
   gst_segment_init (&padpriv->segment, GST_FORMAT_UNDEFINED);
 
@@ -357,17 +368,38 @@ gst_rtp_mux_readjust_rtp_timestamp_locked (GstRTPMux * rtp_mux,
   gst_rtp_buffer_set_timestamp (rtpbuffer, ts);
 }
 
+static gint
+update_pad_seqnum (GstRTPMuxPadPrivate * padpriv, gboolean maintain_seqnum_gap,
+    guint32 pad_ssrc, guint16 pad_seqnum)
+{
+  gint inc;
+  if (padpriv->last_ssrc != pad_ssrc) {
+    inc = 1;
+    padpriv->last_ssrc = pad_ssrc;
+  } else if (maintain_seqnum_gap) {
+    inc = gst_rtp_buffer_compare_seqnum (padpriv->last_seqnum, pad_seqnum);
+  } else {
+    inc = 1;
+  }
+  padpriv->last_seqnum = pad_seqnum;
+  return inc;
+}
+
 static gboolean
 process_buffer_locked (GstRTPMux * rtp_mux, GstRTPMuxPadPrivate * padpriv,
     GstRTPBuffer * rtpbuffer)
 {
   GstRTPMuxClass *klass = GST_RTP_MUX_GET_CLASS (rtp_mux);
 
+  gint increment = update_pad_seqnum (padpriv, rtp_mux->maintain_seqnum_gap,
+      gst_rtp_buffer_get_ssrc (rtpbuffer),
+      gst_rtp_buffer_get_seq (rtpbuffer));
+
   if (klass->accept_buffer_locked)
     if (!klass->accept_buffer_locked (rtp_mux, padpriv, rtpbuffer))
       return FALSE;
 
-  rtp_mux->seqnum++;
+  rtp_mux->seqnum += increment;
   gst_rtp_buffer_set_seq (rtpbuffer, rtp_mux->seqnum);
 
   gst_rtp_buffer_set_ssrc (rtpbuffer, rtp_mux->current_ssrc);
@@ -856,6 +888,9 @@ gst_rtp_mux_get_property (GObject * object,
     case PROP_SSRC:
       g_value_set_uint (value, rtp_mux->ssrc);
       break;
+    case PROP_MAINTAIN_SEQ_NUM_GAP:
+      g_value_set_boolean (value, rtp_mux->maintain_seqnum_gap);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -884,6 +919,11 @@ gst_rtp_mux_set_property (GObject * object,
       rtp_mux->current_ssrc = rtp_mux->ssrc;
       rtp_mux->have_ssrc = TRUE;
       GST_DEBUG_OBJECT (rtp_mux, "ssrc prop set to %x", rtp_mux->ssrc);
+      GST_OBJECT_UNLOCK (rtp_mux);
+      break;
+    case PROP_MAINTAIN_SEQ_NUM_GAP:
+      GST_OBJECT_LOCK (rtp_mux);
+      rtp_mux->maintain_seqnum_gap = g_value_get_boolean (value);
       GST_OBJECT_UNLOCK (rtp_mux);
       break;
     default:
