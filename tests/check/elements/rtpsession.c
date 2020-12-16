@@ -25,6 +25,16 @@
 #  define GLIB_DISABLE_DEPRECATION_WARNINGS
 #endif
 
+#ifdef HAVE_CONFIG_H
+# include <config.h>
+#endif
+
+#ifdef HAVE_VALGRIND
+# include <valgrind/valgrind.h>
+#else
+# define RUNNING_ON_VALGRIND 0
+#endif
+
 #include <gst/check/gstharness.h>
 #include <gst/check/gstcheck.h>
 #include <gst/check/gsttestclock.h>
@@ -362,7 +372,8 @@ session_harness_set_twcc_send_ext_id (SessionHarness * h, guint8 ext_id)
   gst_harness_set_src_caps (h->send_rtp_h, caps);
 }
 
-GST_START_TEST (test_multiple_ssrc_rr)
+static void
+test_multiple_ssrc_rr_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstFlowReturn res;
@@ -377,6 +388,14 @@ GST_START_TEST (test_multiple_ssrc_rr)
     0xDEADBEEF,
   };
 
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
   /* receive buffers with multiple ssrcs */
   for (i = 0; i < 2; i++) {
     for (j = 0; j < G_N_ELEMENTS (ssrcs); j++) {
@@ -387,7 +406,7 @@ GST_START_TEST (test_multiple_ssrc_rr)
   }
 
   /* crank the rtcp-thread and pull out the rtcp-packet we have generated */
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 1);
   out_buf = session_harness_pull_rtcp (h);
 
   /* verify we have report blocks for both ssrcs */
@@ -419,12 +438,23 @@ GST_START_TEST (test_multiple_ssrc_rr)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_multiple_ssrc_rr)
+{
+  test_multiple_ssrc_rr_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_multiple_ssrc_rr_with_twcc_interval)
+{
+  test_multiple_ssrc_rr_impl (TRUE);
+}
 GST_END_TEST;
 
 /* This verifies that rtpsession will correctly place RBs round-robin
  * across multiple RRs when there are too many senders that their RBs
  * do not fit in one RR */
-GST_START_TEST (test_multiple_senders_roundrobin_rbs)
+static void
+test_multiple_senders_roundrobin_rbs_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstFlowReturn res;
@@ -434,6 +464,14 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
   guint i, j, k;
   guint32 ssrc;
   GHashTable *rb_ssrcs, *tmp_set;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
@@ -507,9 +545,20 @@ GST_START_TEST (test_multiple_senders_roundrobin_rbs)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_multiple_senders_roundrobin_rbs)
+{
+  test_multiple_senders_roundrobin_rbs_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_no_rbs_for_internal_senders)
+GST_START_TEST (test_multiple_senders_roundrobin_rbs_with_twcc_interval)
+{
+  test_multiple_senders_roundrobin_rbs_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_no_rbs_for_internal_senders_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstFlowReturn res;
@@ -521,6 +570,14 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
   GHashTable *sr_ssrcs;
   GHashTable *rb_ssrcs, *tmp_set;
 
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
   /* Push RTP from our send SSRCs */
   for (j = 0; j < 5; j++) {     /* packets per ssrc */
     for (k = 0; k < 2; k++) {   /* number of ssrcs */
@@ -531,7 +588,7 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
   }
 
   /* crank the RTCP pad thread */
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 2);
 
   sr_ssrcs = g_hash_table_new (g_direct_hash, g_direct_equal);
 
@@ -627,9 +684,20 @@ GST_START_TEST (test_no_rbs_for_internal_senders)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_no_rbs_for_internal_senders)
+{
+  test_no_rbs_for_internal_senders_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_internal_sources_timeout)
+GST_START_TEST (test_no_rbs_for_internal_senders_with_twcc_interval)
+{
+  test_no_rbs_for_internal_senders_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_internal_sources_timeout_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   guint internal_ssrc;
@@ -642,6 +710,14 @@ GST_START_TEST (test_internal_sources_timeout)
   gint i, j;
   GstCaps *caps;
   gboolean seen_bye;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
   g_object_get (h->internal_session, "internal-ssrc", &internal_ssrc, NULL);
@@ -760,6 +836,16 @@ GST_START_TEST (test_internal_sources_timeout)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_internal_sources_timeout)
+{
+  test_internal_sources_timeout_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_internal_sources_timeout_with_twcc_interval)
+{
+  test_internal_sources_timeout_impl (TRUE);
+}
 GST_END_TEST;
 
 typedef struct
@@ -780,7 +866,8 @@ on_app_rtcp_cb (G_GNUC_UNUSED GObject * session, guint subtype, guint ssrc,
   result->data = data ? gst_buffer_ref (data) : NULL;
 }
 
-GST_START_TEST (test_receive_rtcp_app_packet)
+static void
+test_receive_rtcp_app_packet_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -788,6 +875,14 @@ GST_START_TEST (test_receive_rtcp_app_packet)
   GstRTCPPacket packet;
   RTCPAppResult result = { 0 };
   guint8 data[] = { 0x11, 0x22, 0x33, 0x44 };
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_signal_connect (h->internal_session, "on-app-rtcp",
       G_CALLBACK (on_app_rtcp_cb), &result);
@@ -835,6 +930,16 @@ GST_START_TEST (test_receive_rtcp_app_packet)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_receive_rtcp_app_packet)
+{
+  test_receive_rtcp_app_packet_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_receive_rtcp_app_packet_with_twcc_interval)
+{
+  test_receive_rtcp_app_packet_impl (TRUE);
+}
 GST_END_TEST;
 
 static void
@@ -853,10 +958,19 @@ stats_test_cb (G_GNUC_UNUSED GObject * object, G_GNUC_UNUSED GParamSpec * spec,
   *cb_called = TRUE;
 }
 
-GST_START_TEST (test_dont_lock_on_stats)
+static void
+test_dont_lock_on_stats_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   gboolean cb_called = FALSE;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* connect to the stats-reporting */
   g_signal_connect (h->session, "notify::stats",
@@ -867,13 +981,23 @@ GST_START_TEST (test_dont_lock_on_stats)
       session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
 
   /* crank the RTCP-thread and pull out rtcp, generating a stats-callback */
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 1);
   gst_buffer_unref (session_harness_pull_rtcp (h));
   fail_unless (cb_called);
 
   session_harness_free (h);
 }
 
+GST_START_TEST (test_dont_lock_on_stats)
+{
+  test_dont_lock_on_stats_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_dont_lock_on_stats_with_twcc_interval)
+{
+  test_dont_lock_on_stats_impl (TRUE);
+}
 GST_END_TEST;
 
 static void
@@ -936,10 +1060,19 @@ create_bye_rtcp (guint32 ssrc)
   return buffer;
 }
 
-GST_START_TEST (test_ignore_suspicious_bye)
+static void
+test_ignore_suspicious_bye_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   gboolean cb_called = FALSE;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* connect to the stats-reporting */
   g_signal_connect (h->session, "notify::stats",
@@ -954,13 +1087,23 @@ GST_START_TEST (test_ignore_suspicious_bye)
       session_harness_recv_rtcp (h, create_bye_rtcp (0xDEADBEEF)));
 
   /* "crank" and check the stats */
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 1);
   gst_buffer_unref (session_harness_pull_rtcp (h));
   fail_unless (cb_called);
 
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ignore_suspicious_bye)
+{
+  test_ignore_suspicious_bye_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_ignore_suspicious_bye_with_twcc_interval)
+{
+  test_ignore_suspicious_bye_impl (TRUE);
+}
 GST_END_TEST;
 
 static GstBuffer *
@@ -970,7 +1113,8 @@ create_buffer (guint8 * data, gsize size)
       data, size, 0, size, NULL, NULL);
 }
 
-GST_START_TEST (test_receive_regular_pli)
+static void
+test_receive_regular_pli_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstEvent *ev;
@@ -984,6 +1128,14 @@ GST_START_TEST (test_receive_regular_pli)
     0x37, 0x56, 0x93, 0xed      /* Media SSRC */
   };
 
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
   fail_unless_equals_int (GST_FLOW_OK,
       session_harness_send_rtp (h, generate_test_buffer (0, 928420845)));
 
@@ -1008,9 +1160,20 @@ GST_START_TEST (test_receive_regular_pli)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_receive_regular_pli)
+{
+  test_receive_regular_pli_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_receive_pli_no_sender_ssrc)
+GST_START_TEST (test_receive_regular_pli_with_twcc_interval)
+{
+  test_receive_regular_pli_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_receive_pli_no_sender_ssrc_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstEvent *ev;
@@ -1024,6 +1187,14 @@ GST_START_TEST (test_receive_pli_no_sender_ssrc)
     0x37, 0x56, 0x93, 0xed      /* Media SSRC */
   };
 
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
   fail_unless_equals_int (GST_FLOW_OK,
       session_harness_send_rtp (h, generate_test_buffer (0, 928420845)));
 
@@ -1048,6 +1219,16 @@ GST_START_TEST (test_receive_pli_no_sender_ssrc)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_receive_pli_no_sender_ssrc)
+{
+  test_receive_pli_no_sender_ssrc_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_receive_pli_no_sender_ssrc_with_twcc_interval)
+{
+  test_receive_pli_no_sender_ssrc_impl (TRUE);
+}
 GST_END_TEST;
 
 static void
@@ -1077,13 +1258,22 @@ on_ssrc_collision_cb (G_GNUC_UNUSED GstElement * rtpsession,
   *had_collision = TRUE;
 }
 
-GST_START_TEST (test_ssrc_collision_when_sending)
+static void
+test_ssrc_collision_when_sending_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   GstEvent *ev;
   GSocketAddress *saddr;
   gboolean had_collision = FALSE;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_signal_connect (h->internal_session, "on-ssrc-collision",
       G_CALLBACK (on_ssrc_collision_cb), &had_collision);
@@ -1122,9 +1312,20 @@ GST_START_TEST (test_ssrc_collision_when_sending)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ssrc_collision_when_sending)
+{
+  test_ssrc_collision_when_sending_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_ssrc_collision_when_sending_loopback)
+GST_START_TEST (test_ssrc_collision_when_sending_with_twcc_interval)
+{
+  test_ssrc_collision_when_sending_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_ssrc_collision_when_sending_loopback_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -1133,6 +1334,14 @@ GST_START_TEST (test_ssrc_collision_when_sending_loopback)
   gboolean had_collision = FALSE;
   guint new_ssrc;
   const GstStructure *s;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_signal_connect (h->internal_session, "on-ssrc-collision",
       G_CALLBACK (on_ssrc_collision_cb), &had_collision);
@@ -1195,15 +1404,34 @@ GST_START_TEST (test_ssrc_collision_when_sending_loopback)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ssrc_collision_when_sending_loopback)
+{
+  test_ssrc_collision_when_sending_loopback_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_ssrc_collision_when_receiving)
+GST_START_TEST (test_ssrc_collision_when_sending_loopback_with_twcc_interval)
+{
+  test_ssrc_collision_when_sending_loopback_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_ssrc_collision_when_receiving_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   GstEvent *ev;
   GSocketAddress *saddr;
   gboolean had_collision = FALSE;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_signal_connect (h->internal_session, "on-ssrc-collision",
       G_CALLBACK (on_ssrc_collision_cb), &had_collision);
@@ -1240,16 +1468,34 @@ GST_START_TEST (test_ssrc_collision_when_receiving)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ssrc_collision_when_receiving)
+{
+  test_ssrc_collision_when_receiving_impl (FALSE);
+}
 GST_END_TEST;
 
+GST_START_TEST (test_ssrc_collision_when_receiving_with_twcc_interval)
+{
+  test_ssrc_collision_when_receiving_impl (TRUE);
+}
+GST_END_TEST;
 
-GST_START_TEST (test_ssrc_collision_third_party)
+static void
+test_ssrc_collision_third_party_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   GSocketAddress *saddr;
   gboolean had_collision = FALSE;
   guint i;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_signal_connect (h->internal_session, "on-ssrc-collision",
       G_CALLBACK (on_ssrc_collision_cb), &had_collision);
@@ -1298,16 +1544,34 @@ GST_START_TEST (test_ssrc_collision_third_party)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ssrc_collision_third_party)
+{
+  test_ssrc_collision_third_party_impl (FALSE);
+}
 GST_END_TEST;
 
+GST_START_TEST (test_ssrc_collision_third_party_with_twcc_interval)
+{
+  test_ssrc_collision_third_party_impl (TRUE);
+}
+GST_END_TEST;
 
-GST_START_TEST (test_ssrc_collision_third_party_favor_new)
+static void
+test_ssrc_collision_third_party_favor_new_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   GSocketAddress *saddr;
   gboolean had_collision = FALSE;
   guint i;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "favor-new", TRUE, NULL);
   g_signal_connect (h->internal_session, "on-ssrc-collision",
@@ -1346,9 +1610,20 @@ GST_START_TEST (test_ssrc_collision_third_party_favor_new)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ssrc_collision_third_party_favor_new)
+{
+  test_ssrc_collision_third_party_favor_new_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_ssrc_collision_third_party_disable)
+GST_START_TEST (test_ssrc_collision_third_party_favor_new_with_twcc_interval)
+{
+  test_ssrc_collision_third_party_favor_new_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_ssrc_collision_third_party_disable_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -1357,6 +1632,14 @@ GST_START_TEST (test_ssrc_collision_third_party_disable)
   guint i;
   GObject *source;
   GstStructure *stats;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session,
       "ssrc-collision-detection", FALSE, "favor-new", TRUE, NULL);
@@ -1443,15 +1726,35 @@ GST_START_TEST (test_ssrc_collision_third_party_disable)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ssrc_collision_third_party_disable)
+{
+  test_ssrc_collision_third_party_disable_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_ssrc_collision_never_send_on_non_internal_source)
+GST_START_TEST (test_ssrc_collision_third_party_disable_with_twcc_interval)
+{
+  test_ssrc_collision_third_party_disable_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_ssrc_collision_never_send_on_non_internal_source_impl (
+    gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   GstEvent *ev;
   GSocketAddress *saddr;
   gboolean had_collision = FALSE;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_signal_connect (h->internal_session, "on-ssrc-collision",
       G_CALLBACK (on_ssrc_collision_cb), &had_collision);
@@ -1507,6 +1810,16 @@ GST_START_TEST (test_ssrc_collision_never_send_on_non_internal_source)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_ssrc_collision_never_send_on_non_internal_source)
+{
+  test_ssrc_collision_never_send_on_non_internal_source_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_ssrc_collision_never_send_on_non_internal_source_with_twcc_interval)
+{
+  test_ssrc_collision_never_send_on_non_internal_source_impl (TRUE);
+}
 GST_END_TEST;
 
 static guint32
@@ -1518,7 +1831,8 @@ _get_ssrc_from_event (GstEvent * event)
   return ret;
 }
 
-GST_START_TEST (test_request_fir)
+static void
+test_request_fir_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *send_h = session_harness_new ();
   SessionHarness *recv_h = session_harness_new ();
@@ -1529,6 +1843,16 @@ GST_START_TEST (test_request_fir)
   guint32 ssrc0 = 0x12345678;
   guint32 ssrc1 = 0x87654321;
   GstEvent *ev;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (send_h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+    g_object_set (recv_h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* add FIR-capabilites to our caps */
   gst_caps_set_simple (recv_h->caps, "rtcp-fb-ccm-fir", G_TYPE_BOOLEAN, TRUE,
@@ -1637,14 +1961,33 @@ GST_START_TEST (test_request_fir)
   session_harness_free (recv_h);
 }
 
+GST_START_TEST (test_request_fir)
+{
+  test_request_fir_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_request_pli)
+GST_START_TEST (test_request_fir_with_twcc_interval)
+{
+  test_request_fir_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_request_pli_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* add PLI-capabilites to our caps */
   gst_caps_set_simple (h->caps, "rtcp-fb-nack-pli", G_TYPE_BOOLEAN, TRUE, NULL);
@@ -1699,15 +2042,34 @@ GST_START_TEST (test_request_pli)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_request_pli)
+{
+  test_request_pli_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_request_fir_after_pli_in_caps)
+GST_START_TEST (test_request_pli_with_twcc_interval)
+{
+  test_request_pli_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_request_fir_after_pli_in_caps_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
   guint8 *fci_data;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* add PLI-capabilites to our caps */
   gst_caps_set_simple (h->caps, "rtcp-fb-nack-pli", G_TYPE_BOOLEAN, TRUE, NULL);
@@ -1827,14 +2189,33 @@ GST_START_TEST (test_request_fir_after_pli_in_caps)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_request_fir_after_pli_in_caps)
+{
+  test_request_fir_after_pli_in_caps_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_illegal_rtcp_fb_packet)
+GST_START_TEST (test_request_fir_after_pli_in_caps_with_twcc_interval)
+{
+  test_request_fir_after_pli_in_caps_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_illegal_rtcp_fb_packet_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   /* Zero length RTCP feedback packet (reduced size) */
   const guint8 rtcp_zero_fb_pkt[] = { 0x8f, 0xce, 0x00, 0x00 };
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
@@ -1849,9 +2230,20 @@ GST_START_TEST (test_illegal_rtcp_fb_packet)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_illegal_rtcp_fb_packet)
+{
+  test_illegal_rtcp_fb_packet_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_illegal_rtcp_type_packet)
+GST_START_TEST (test_illegal_rtcp_fb_packet_with_twcc_interval)
+{
+  test_illegal_rtcp_fb_packet_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_illegal_rtcp_type_packet_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -1867,6 +2259,15 @@ GST_START_TEST (test_illegal_rtcp_type_packet)
     /* Invalid RTCP packet type (ignore it) */
     0x80, 0x00, 0x00, 0x00
   };
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
   buf = gst_buffer_new_and_alloc (sizeof (rtcp_invalid_type_pkt));
@@ -1880,6 +2281,16 @@ GST_START_TEST (test_illegal_rtcp_type_packet)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_illegal_rtcp_type_packet)
+{
+  test_illegal_rtcp_type_packet_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_illegal_rtcp_type_packet_with_twcc_interval)
+{
+  test_illegal_rtcp_type_packet_impl (TRUE);
+}
 GST_END_TEST;
 
 typedef struct
@@ -1920,7 +2331,8 @@ send_feedback_rtcp (SessionHarness * h)
   return NULL;
 }
 
-GST_START_TEST (test_feedback_rtcp_race)
+static void
+test_feedback_rtcp_race_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
 
@@ -1928,6 +2340,14 @@ GST_START_TEST (test_feedback_rtcp_race)
   GMutex mutex;
   FeedbackRTCPCallbackData cb_data;
   GThread *send_rtcp_thread;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_cond_init (&cond);
   g_mutex_init (&mutex);
@@ -1963,11 +2383,30 @@ GST_START_TEST (test_feedback_rtcp_race)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_feedback_rtcp_race)
+{
+  test_feedback_rtcp_race_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_dont_send_rtcp_while_idle)
+GST_START_TEST (test_feedback_rtcp_race_with_twcc_interval)
+{
+  test_feedback_rtcp_race_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_dont_send_rtcp_while_idle_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* verify the RTCP thread has not started */
   fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
@@ -1977,12 +2416,31 @@ GST_START_TEST (test_dont_send_rtcp_while_idle)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_dont_send_rtcp_while_idle)
+{
+  test_dont_send_rtcp_while_idle_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_send_rtcp_when_signalled)
+GST_START_TEST (test_dont_send_rtcp_while_idle_with_twcc_interval)
+{
+  test_dont_send_rtcp_while_idle_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_send_rtcp_when_signalled_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   gboolean ret;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* verify the RTCP thread has not started */
   fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
@@ -1996,12 +2454,22 @@ GST_START_TEST (test_send_rtcp_when_signalled)
   fail_unless (ret == FALSE);
 
   /* "crank" and verify RTCP now was sent */
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 1);
   gst_buffer_unref (session_harness_pull_rtcp (h));
 
   session_harness_free (h);
 }
 
+GST_START_TEST (test_send_rtcp_when_signalled)
+{
+  test_send_rtcp_when_signalled_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_send_rtcp_when_signalled_with_twcc_interval)
+{
+  test_send_rtcp_when_signalled_impl (TRUE);
+}
 GST_END_TEST;
 
 static void
@@ -2050,13 +2518,22 @@ sdes_done:
 
 }
 
-GST_START_TEST (test_change_sent_sdes)
+static void
+test_change_sent_sdes_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstStructure *s;
   GstBuffer *buf;
   gboolean ret;
   GstFlowReturn res;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* verify the RTCP thread has not started */
   fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
@@ -2075,7 +2552,7 @@ GST_START_TEST (test_change_sent_sdes)
   fail_unless (ret == FALSE);
 
   /* "crank" and verify RTCP now was sent */
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 1);
   buf = session_harness_pull_rtcp (h);
   fail_unless (buf);
   validate_sdes_priv (buf, "other", "first");
@@ -2093,16 +2570,7 @@ GST_START_TEST (test_change_sent_sdes)
   fail_unless_equals_int (GST_FLOW_OK, res);
 
   /* "crank" enough to ensure a RTCP packet has been produced ! */
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 1);
 
   /* and verify RTCP now was sent with new SDES */
   buf = session_harness_pull_rtcp (h);
@@ -2112,9 +2580,20 @@ GST_START_TEST (test_change_sent_sdes)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_change_sent_sdes)
+{
+  test_change_sent_sdes_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_request_nack)
+GST_START_TEST (test_change_sent_sdes_with_twcc_interval)
+{
+  test_change_sent_sdes_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_request_nack_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -2122,6 +2601,14 @@ GST_START_TEST (test_request_nack)
   GstRTCPPacket rtcp_packet;
   guint8 *fci_data;
   guint32 fci_length;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
@@ -2178,6 +2665,16 @@ GST_START_TEST (test_request_nack)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_request_nack)
+{
+  test_request_nack_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_request_nack_with_twcc_interval)
+{
+  test_request_nack_impl (TRUE);
+}
 GST_END_TEST;
 
 typedef struct
@@ -2206,6 +2703,8 @@ on_rtcp_pad_blocked (G_GNUC_UNUSED GstPad * pad,
 static void
 session_harness_block_rtcp (SessionHarness * h, BlockingProbeData * probe)
 {
+  const gint timeout = RUNNING_ON_VALGRIND ? 100000 : 30000; /* ms */
+
   probe->pad = gst_element_get_static_pad (h->session, "send_rtcp_src");
   fail_unless (probe->pad);
 
@@ -2219,7 +2718,8 @@ session_harness_block_rtcp (SessionHarness * h, BlockingProbeData * probe)
   g_mutex_lock (&probe->mutex);
   while (!probe->blocked) {
     session_harness_crank_clock (h);
-    g_cond_wait (&probe->cond, &probe->mutex);
+    g_cond_wait_until (&probe->cond, &probe->mutex,
+        g_get_monotonic_time() + timeout);
   }
   g_mutex_unlock (&probe->mutex);
 }
@@ -2233,7 +2733,8 @@ session_harness_unblock_rtcp (G_GNUC_UNUSED SessionHarness * h,
   g_mutex_clear (&probe->mutex);
 }
 
-GST_START_TEST (test_request_nack_surplus)
+static void
+test_request_nack_surplus_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstRTCPPacket rtcp_packet;
@@ -2243,6 +2744,14 @@ GST_START_TEST (test_request_nack_surplus)
   guint8 *fci_data;
   gint i;
   GstStructure *sdes;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
@@ -2256,8 +2765,12 @@ GST_START_TEST (test_request_nack_surplus)
   fail_unless_equals_int (GST_FLOW_OK,
       session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
 
+  GST_INFO ("a");
+
   /* Block on first regular RTCP so we can fill the nack list */
   session_harness_block_rtcp (h, &probe);
+
+  GST_INFO("b");
 
   /* request 400 NACK with 17 seqnum distance to optain the worst possible
    * packing  */
@@ -2269,13 +2782,19 @@ GST_START_TEST (test_request_nack_surplus)
     session_harness_rtp_retransmission_request (h, 0x12345678, 1234 + i * 17,
         0, 2000, 0);
 
+  GST_INFO("c");
+
   /* Unblock and wait for the regular and first early packet */
   session_harness_unblock_rtcp (h, &probe);
   session_harness_produce_rtcp (h, 2);
 
+  GST_INFO("d");
+
   /* Move time forward, so that only the remaining 50 are still up to date */
   session_harness_advance_and_crank (h, GST_SECOND);
   session_harness_produce_rtcp (h, 3);
+
+  GST_INFO("e");
 
   /* ignore the regular RTCP packet */
   buf = session_harness_pull_rtcp (h);
@@ -2358,9 +2877,20 @@ GST_START_TEST (test_request_nack_surplus)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_request_nack_surplus)
+{
+  test_request_nack_surplus_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_request_nack_packing)
+GST_START_TEST (test_request_nack_surplus_with_twcc_interval)
+{
+  test_request_nack_surplus_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_request_nack_packing_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstRTCPPacket rtcp_packet;
@@ -2369,6 +2899,14 @@ GST_START_TEST (test_request_nack_packing)
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   guint8 *fci_data;
   gint i;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
@@ -2435,9 +2973,20 @@ GST_START_TEST (test_request_nack_packing)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_request_nack_packing)
+{
+  test_request_nack_packing_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_disable_sr_timestamp)
+GST_START_TEST (test_request_nack_packing_with_twcc_interval)
+{
+  test_request_nack_packing_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_disable_sr_timestamp_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -2446,6 +2995,14 @@ GST_START_TEST (test_disable_sr_timestamp)
   guint64 ntptime;
   guint32 rtptime;
 
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
   g_object_set (h->internal_session, "disable-sr-timestamp", TRUE, NULL);
 
   /* Push RTP buffer to make sure RTCP-thread have started */
@@ -2453,7 +3010,7 @@ GST_START_TEST (test_disable_sr_timestamp)
       session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
 
   /* crank the RTCP-thread and pull out rtcp, generating a stats-callback */
-  session_harness_crank_clock (h);
+  session_harness_produce_rtcp (h, 1);
   buf = session_harness_pull_rtcp (h);
 
   gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp);
@@ -2475,6 +3032,16 @@ GST_START_TEST (test_disable_sr_timestamp)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_disable_sr_timestamp)
+{
+  test_disable_sr_timestamp_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_disable_sr_timestamp_with_twcc_interval)
+{
+  test_disable_sr_timestamp_impl (TRUE);
+}
 GST_END_TEST;
 
 static guint
@@ -2504,7 +3071,8 @@ on_sending_nacks (G_GNUC_UNUSED GObject * internal_session,
   return 1;
 }
 
-GST_START_TEST (test_on_sending_nacks)
+static void
+test_on_sending_nacks_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   BlockingProbeData probe;
@@ -2512,6 +3080,14 @@ GST_START_TEST (test_on_sending_nacks)
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket rtcp_packet;
   guint8 *data;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
@@ -2606,6 +3182,16 @@ GST_START_TEST (test_on_sending_nacks)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_on_sending_nacks)
+{
+  test_on_sending_nacks_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_on_sending_nacks_with_twcc_interval)
+{
+  test_on_sending_nacks_impl (TRUE);
+}
 GST_END_TEST;
 
 static void
@@ -2615,9 +3201,18 @@ disable_probation_on_new_ssrc (G_GNUC_UNUSED GObject * session,
   g_object_set (source, "probation", 0, NULL);
 }
 
-GST_START_TEST (test_disable_probation)
+static void
+test_disable_probation_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
   g_signal_connect (h->internal_session, "on-new-ssrc",
@@ -2633,9 +3228,20 @@ GST_START_TEST (test_disable_probation)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_disable_probation)
+{
+  test_disable_probation_impl (FALSE);
+}
 GST_END_TEST;
 
-GST_START_TEST (test_request_late_nack)
+GST_START_TEST (test_disable_probation_with_twcc_interval)
+{
+  test_disable_probation_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_request_late_nack_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -2643,6 +3249,14 @@ GST_START_TEST (test_request_late_nack)
   GstRTCPPacket rtcp_packet;
   guint8 *fci_data;
   guint32 fci_length;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
 
@@ -2703,6 +3317,16 @@ GST_START_TEST (test_request_late_nack)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_request_late_nack)
+{
+  test_request_late_nack_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_request_late_nack_with_twcc_interval)
+{
+  test_request_late_nack_impl (TRUE);
+}
 GST_END_TEST;
 
 static gpointer
@@ -2723,11 +3347,20 @@ _push_caps_events (gpointer user_data)
   return NULL;
 }
 
-GST_START_TEST (test_clear_pt_map_stress)
+static void
+test_clear_pt_map_stress_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   GThread *thread;
   guint i;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   h->running = TRUE;
   thread = g_thread_new (NULL, _push_caps_events, h);
@@ -2743,6 +3376,16 @@ GST_START_TEST (test_clear_pt_map_stress)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_clear_pt_map_stress)
+{
+  test_clear_pt_map_stress_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_clear_pt_map_stress_with_twcc_interval)
+{
+  test_clear_pt_map_stress_impl (TRUE);
+}
 GST_END_TEST;
 
 static GstBuffer *
@@ -2767,7 +3410,7 @@ generate_stepped_ts_buffer (guint i, gboolean stepped)
 }
 
 static void
-test_packet_rate_impl (gboolean stepped)
+test_packet_rate_impl (gboolean enable_twcc_interval, gboolean stepped)
 {
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
@@ -2776,6 +3419,14 @@ test_packet_rate_impl (gboolean stepped)
   GstStructure *stats;
   GObject *source;
   guint pktrate;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* First do probation */
   for (i = 0; i < PROBATION_CNT; i++) {
@@ -2815,16 +3466,26 @@ test_packet_rate_impl (gboolean stepped)
 
 GST_START_TEST (test_packet_rate)
 {
-  test_packet_rate_impl (FALSE);
+  test_packet_rate_impl (FALSE, FALSE);
 }
+GST_END_TEST;
 
+GST_START_TEST (test_packet_rate_with_twcc_interval)
+{
+  test_packet_rate_impl (TRUE, FALSE);
+}
 GST_END_TEST;
 
 GST_START_TEST (test_stepped_packet_rate)
 {
-  test_packet_rate_impl (FALSE);
+  test_packet_rate_impl (FALSE, FALSE);
 }
+GST_END_TEST;
 
+GST_START_TEST (test_stepped_packet_rate_with_twcc_interval)
+{
+  test_packet_rate_impl (TRUE, FALSE);
+}
 GST_END_TEST;
 
 
@@ -2852,7 +3513,8 @@ _ssrc_pse (G_GNUC_UNUSED GObject * session, GObject * src, guint type,
       gst_buffer_memcmp (pse, 0, pse_data, sizeof (pse_data)));
 }
 
-GST_START_TEST (test_creating_srrr)
+static void
+test_creating_srrr_impl (gboolean enable_twcc_interval)
 {
   SessionHarness *h = session_harness_new ();
   guint i;
@@ -2861,6 +3523,14 @@ GST_START_TEST (test_creating_srrr)
   GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
   GstRTCPPacket packet;
   guint pse_ssrc = 0;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
 
   /* Connect to on-creating-sr-rr which will append 8 bytes of
    * profile-specific extension data */
@@ -2896,6 +3566,578 @@ GST_START_TEST (test_creating_srrr)
   session_harness_free (h);
 }
 
+GST_START_TEST (test_creating_srrr)
+{
+  test_creating_srrr_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_creating_srrr_with_twcc_interval)
+{
+  test_creating_srrr_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_send_rtcp_instantly_impl (gboolean enable_twcc_interval)
+{
+  SessionHarness *h = session_harness_new ();
+  gboolean ret;
+  const GstClockTime now = 123456789;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
+  /* advance the clock to "now" */
+  gst_test_clock_set_time (h->testclock, now);
+
+  /* verify the RTCP thread has not started */
+  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
+  /* and that no RTCP has been pushed */
+  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
+
+  /* then ask explicitly to send RTCP with 0 timeout (now!) */
+  g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
+  /* this is TRUE due to ? */
+  fail_unless (ret == TRUE);
+
+  /* "crank" and verify RTCP now was sent */
+  session_harness_crank_clock (h);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+
+  /* and check the time is "now" */
+  fail_unless_equals_int64 (now, gst_clock_get_time (GST_CLOCK (h->testclock)));
+
+  session_harness_free (h);
+}
+
+GST_START_TEST (test_send_rtcp_instantly)
+{
+  test_send_rtcp_instantly_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_send_rtcp_instantly_with_twcc_interval)
+{
+  test_send_rtcp_instantly_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_send_bye_signal_impl (gboolean enable_twcc_interval)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket rtcp_packet;
+  guint32 ssrc;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
+  /* push a buffer to establish an internal source */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
+
+  /* emit the signal to signal bye on all sources */
+  g_signal_emit_by_name (h->session, "send-bye");
+
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  /* our RTCP buffer has 3 packets */
+  fail_unless_equals_int (3, gst_rtcp_buffer_get_packet_count (&rtcp));
+
+  /* first a Sender Report */
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+  fail_unless_equals_int (GST_RTCP_TYPE_SR,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, NULL,
+      NULL, NULL);
+  fail_unless_equals_int (0xDEADBEEF, ssrc);
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* then a SDES */
+  fail_unless_equals_int (GST_RTCP_TYPE_SDES,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  fail_unless_equals_int (0xDEADBEEF,
+      gst_rtcp_packet_sdes_get_ssrc (&rtcp_packet));
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* and finally the BYE we asked for */
+  fail_unless_equals_int (GST_RTCP_TYPE_BYE,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_buffer_unref (buf);
+  session_harness_free (h);
+}
+
+GST_START_TEST (test_send_bye_signal)
+{
+  test_send_bye_signal_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_send_bye_signal_with_twcc_interval)
+{
+  test_send_bye_signal_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_stats_rtcp_with_multiple_rb_impl (gboolean enable_twcc_interval)
+{
+  SessionHarness *h = session_harness_new ();
+  guint j, k;
+  GstFlowReturn res;
+  GstRTCPPacket packet;
+  gint internal_stats_entries;
+  GstBuffer *buf = NULL;
+  GstStructure *stats = NULL;
+  GValueArray *source_stats = NULL;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
+  /* Push RTP from our send SSRCs */
+  for (j = 0; j < 5; j++) {     /* packets per ssrc */
+    for (k = 0; k < 2; k++) {   /* number of ssrcs */
+      buf = generate_test_buffer (j, 10000 + k);
+      res = session_harness_send_rtp (h, buf);
+      fail_unless_equals_int (GST_FLOW_OK, res);
+    }
+  }
+
+  /* Push RTCP RR with 2 RBs corresponding to our send SSRCs */
+  buf = gst_rtcp_buffer_new (1000);
+  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
+  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RR, &packet));
+  gst_rtcp_packet_rr_set_ssrc (&packet, 20000);
+  for (k = 0; k < 2; k++) {
+    guint32 ssrc = 10000 + k;
+    guint32 jitter = (ssrc % 2) + 10;
+    gst_rtcp_packet_add_rb (&packet, 10000 + k, /* ssrc */
+        0,                      /* fractionlost */
+        0,                      /* packetslost */
+        4,                      /* exthighestseq */
+        jitter,                 /* jitter */
+        0,                      /* lsr */
+        0);                     /* dlsr */
+  }
+  gst_rtcp_buffer_unmap (&rtcp);
+  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
+
+  /* Check that the stats reflect the data we received in RTCP */
+  internal_stats_entries = 0;
+  g_object_get (h->session, "stats", &stats, NULL);
+  fail_unless (stats != NULL);
+  source_stats =
+      g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
+  fail_unless (source_stats != NULL);
+  for (j = 0; j < source_stats->n_values; j++) {
+    guint32 ssrc;
+    gboolean internal;
+    GstStructure *s =
+        g_value_get_boxed (g_value_array_get_nth (source_stats, j));
+    fail_unless (gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal,
+            "ssrc", G_TYPE_UINT, &ssrc, NULL));
+    if (internal) {
+      gboolean have_rb;
+      guint rb_fractionlost;
+      gint rb_packetslost;
+      guint rb_exthighestseq;
+      guint rb_jitter;
+      guint rb_lsr;
+      guint rb_dlsr;
+
+      fail_unless_equals_int (ssrc, 10000 + internal_stats_entries);
+
+      fail_unless (gst_structure_get (s,
+              "have-rb", G_TYPE_BOOLEAN, &have_rb,
+              "rb-fractionlost", G_TYPE_UINT, &rb_fractionlost,
+              "rb-packetslost", G_TYPE_INT, &rb_packetslost,
+              "rb-exthighestseq", G_TYPE_UINT, &rb_exthighestseq,
+              "rb-jitter", G_TYPE_UINT, &rb_jitter,
+              "rb-lsr", G_TYPE_UINT, &rb_lsr,
+              "rb-dlsr", G_TYPE_UINT, &rb_dlsr, NULL));
+      fail_unless (have_rb);
+      fail_unless_equals_int (rb_fractionlost, 0);
+      fail_unless_equals_int (rb_packetslost, 0);
+      fail_unless_equals_int (rb_exthighestseq, 4);
+      fail_unless_equals_int (rb_jitter, (ssrc % 2) + 10);
+      fail_unless_equals_int (rb_lsr, 0);
+      fail_unless_equals_int (rb_dlsr, 0);
+      internal_stats_entries++;
+    } else {
+      fail_unless_equals_int (ssrc, 20000);
+    }
+  }
+  fail_unless_equals_int (internal_stats_entries, 2);
+
+  gst_structure_free (stats);
+  session_harness_free (h);
+}
+
+GST_START_TEST (test_stats_rtcp_with_multiple_rb)
+{
+  test_stats_rtcp_with_multiple_rb_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_stats_rtcp_with_multiple_rb_with_twcc_interval)
+{
+  test_stats_rtcp_with_multiple_rb_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+count_report_stats (G_GNUC_UNUSED GObject * object,
+    G_GNUC_UNUSED GParamSpec * spec, gint * counter)
+{
+  *counter += 1;
+}
+
+static void
+on_sending_rtcp_add_new_if_empty (G_GNUC_UNUSED GObject * rtpsession,
+    GstBuffer * rtcp_buffer, G_GNUC_UNUSED gboolean is_early,
+    G_GNUC_UNUSED gpointer user_data)
+{
+  if (gst_buffer_get_size (rtcp_buffer) == 0) {
+    GstRTCPPacket packet;
+    GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+
+    gst_rtcp_buffer_map (rtcp_buffer, GST_MAP_READWRITE, &rtcp);
+
+    gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_APP, &packet);
+    gst_rtcp_packet_app_set_subtype (&packet, 1);
+    gst_rtcp_packet_app_set_ssrc (&packet, 0x12345678);
+    gst_rtcp_packet_app_set_name (&packet, "foo");
+
+    gst_rtcp_buffer_unmap (&rtcp);
+  }
+}
+
+static void
+test_report_stats_only_on_regular_rtcp_impl (gboolean enable_twcc_interval)
+{
+  SessionHarness *h = session_harness_new ();
+  gint stats_callback_count = 0;
+  gint i;
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. Tests that want to
+     * generate feedback need to configure extensions themselves. */
+    g_object_set (h->internal_session,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
+  g_object_set (h->internal_session, "probation", 1, "rtcp-reduced-size", TRUE,
+      "stats-notify-min-interval", 3000, NULL);
+  g_signal_connect (h->session, "notify::stats",
+      G_CALLBACK (count_report_stats), &stats_callback_count);
+
+  /* Not allowed to send empty packets, so need to add feedback */
+  g_signal_connect (h->internal_session, "on-sending-rtcp",
+      G_CALLBACK (on_sending_rtcp_add_new_if_empty), NULL);
+
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+
+  session_harness_produce_rtcp (h, 1);
+  gst_buffer_unref (session_harness_pull_rtcp (h));
+  fail_unless_equals_int (stats_callback_count, 1);
+
+  /* send 10 rtcp-packets that should *not* generate stats */
+  for (i = 0; i < 10; i++) {
+    gboolean ret;
+    g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
+    session_harness_advance_and_crank (h, 10 * GST_MSECOND);
+  }
+
+  /* verify we have generated less than 3 stats for all these packets */
+  fail_unless (stats_callback_count < 3);
+
+  session_harness_free (h);
+}
+
+GST_START_TEST (test_report_stats_only_on_regular_rtcp)
+{
+  test_report_stats_only_on_regular_rtcp_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_report_stats_only_on_regular_rtcp_with_twcc_interval)
+{
+  test_report_stats_only_on_regular_rtcp_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+copy_stats (GObject * object, G_GNUC_UNUSED GParamSpec * spec,
+    GstStructure ** stats)
+{
+  if (*stats == NULL)
+    g_object_get (object, "stats", stats, NULL);
+}
+
+static GstCaps *
+rtpsession_request_pt_map (G_GNUC_UNUSED GstElement * element,
+    G_GNUC_UNUSED guint pt, GstCaps * caps)
+{
+  return gst_caps_copy (caps);
+}
+
+static void
+test_stats_transmission_duration_impl (gboolean enable_twcc_interval)
+{
+  GstTestClock *testclock = GST_TEST_CLOCK (gst_test_clock_new ());
+  GstElement *rtpsession;
+  GstHarness *h, *h_rtp;
+  GstStructure *stats = NULL;
+  GValueArray *source_stats;
+  gboolean stats_verified = FALSE;
+  GstCaps *caps = generate_caps ();
+  guint i;
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  gst_system_clock_set_default (GST_CLOCK (testclock));
+
+  h = gst_harness_new_with_padnames ("rtpsession",
+      "recv_rtcp_sink", "send_rtcp_src");
+  h_rtp = gst_harness_new_with_element (h->element,
+      "recv_rtp_sink", "recv_rtp_src");
+
+  g_signal_connect (h->element, "notify::stats", G_CALLBACK (copy_stats),
+      &stats);
+  g_signal_connect (h->element, "request-pt-map",
+      G_CALLBACK (rtpsession_request_pt_map), caps);
+
+  /* Set probation=1 so that first packet is pushed through immediately. Makes
+   * test simpler. */
+  g_object_get (h->element, "internal-session", &rtpsession, NULL);
+  g_object_set (rtpsession, "probation", 1, NULL);
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. */
+    g_object_set (rtpsession,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
+  gst_harness_set_src_caps_str (h_rtp, "application/x-rtp");
+
+  /* first frame has transmission duration of 20 ms */
+  gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (0 * GST_MSECOND,
+          0, 0 * TEST_BUF_CLOCK_RATE / 10));
+
+  gst_test_clock_set_time (testclock, 10 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (10 * GST_MSECOND,
+          1, 0 * TEST_BUF_CLOCK_RATE / 10));
+
+  gst_test_clock_set_time (testclock, 20 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (20 * GST_MSECOND,
+          2, 0 * TEST_BUF_CLOCK_RATE / 10));
+
+  /* second frame has transmission duration of 0 ms */
+  gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (100 * GST_MSECOND,
+          3, 1 * TEST_BUF_CLOCK_RATE / 10));
+
+  /* need third frame to register that second frame is finished */
+  gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (200 * GST_MSECOND,
+          4, 2 * TEST_BUF_CLOCK_RATE / 10));
+
+  /* crank to get the stats */
+  while (stats == NULL) {
+    gst_test_clock_crank (testclock);
+    g_thread_yield ();
+  }
+  fail_unless (stats != NULL);
+
+  source_stats =
+      g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
+  fail_unless (source_stats);
+
+  for (i = 0; i < source_stats->n_values; i++) {
+    GstStructure *s =
+        g_value_get_boxed (g_value_array_get_nth (source_stats, i));
+    gboolean internal;
+    gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
+    if (!internal) {
+      GstClockTime avg_tdur, max_tdur;
+      gst_structure_get (s,
+          "avg-frame-transmission-duration", G_TYPE_UINT64, &avg_tdur,
+          "max-frame-transmission-duration", G_TYPE_UINT64, &max_tdur, NULL);
+      fail_unless_equals_int (max_tdur, 20 * GST_MSECOND);
+      fail_unless_equals_int (avg_tdur, (0 + 1023 * 20 * GST_MSECOND) / 1024);
+      stats_verified = TRUE;
+      break;
+    }
+  }
+  fail_unless (stats_verified);
+
+  gst_structure_free (stats);
+
+  gst_caps_unref (caps);
+  gst_object_unref (testclock);
+  gst_object_unref (rtpsession);
+  gst_harness_teardown (h_rtp);
+  gst_harness_teardown (h);
+
+  /* Reset to default system clock */
+  gst_system_clock_set_default (NULL);
+}
+
+GST_START_TEST (test_stats_transmission_duration)
+{
+  test_stats_transmission_duration_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_stats_transmission_duration_with_twcc_interval)
+{
+  test_stats_transmission_duration_impl (TRUE);
+}
+GST_END_TEST;
+
+static void
+test_stats_transmission_duration_reordering_impl (gboolean enable_twcc_interval)
+{
+  GstTestClock *testclock = GST_TEST_CLOCK (gst_test_clock_new ());
+  GstElement *rtpsession;
+  GstHarness *h, *h_rtp;
+  GstStructure *stats = NULL;
+  GValueArray *source_stats;
+  gboolean stats_verified = FALSE;
+  GstCaps *caps = generate_caps ();
+  guint i;
+
+  /* use testclock as the systemclock to capture the rtcp thread waits */
+  gst_system_clock_set_default (GST_CLOCK (testclock));
+
+  h = gst_harness_new_with_padnames ("rtpsession",
+      "recv_rtcp_sink", "send_rtcp_src");
+  h_rtp = gst_harness_new_with_element (h->element,
+      "recv_rtp_sink", "recv_rtp_src");
+
+  g_signal_connect (h->element, "notify::stats", G_CALLBACK (copy_stats),
+      &stats);
+  g_signal_connect (h->element, "request-pt-map",
+      G_CALLBACK (rtpsession_request_pt_map), caps);
+
+  /* Set probation=1 so that first packet is pushed through immediately. Makes
+   * test simpler. */
+  g_object_get (h->element, "internal-session", &rtpsession, NULL);
+  g_object_set (rtpsession, "probation", 1, NULL);
+
+  if (enable_twcc_interval) {
+    /* Enable interval-based TWCC, but don't configure extensions,
+     * so we won't generate any TWCC feedback. */
+    g_object_set (rtpsession,
+        "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+  }
+
+  gst_harness_set_src_caps_str (h_rtp, "application/x-rtp");
+
+  /* first frame has transmission duration of 20 ms */
+  gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (0 * GST_MSECOND,
+          0, 0 * TEST_BUF_CLOCK_RATE / 10));
+
+  gst_test_clock_set_time (testclock, 50 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (50 * GST_MSECOND,
+          1, 0 * TEST_BUF_CLOCK_RATE / 10));
+
+  /* second frame comes before last packet of previous frame  */
+  gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (100 * GST_MSECOND,
+          3, 1 * TEST_BUF_CLOCK_RATE / 10));
+
+  /* last packet of first frame arrives */
+  gst_test_clock_set_time (testclock, 110 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (110 * GST_MSECOND,
+          2, 0 * TEST_BUF_CLOCK_RATE / 10));
+
+  /* need third frame to register that second frame is finished */
+  gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
+  gst_harness_push (h_rtp, generate_test_buffer_timed (200 * GST_MSECOND,
+          4, 2 * TEST_BUF_CLOCK_RATE / 10));
+
+  /* crank to get the stats */
+  while (stats == NULL) {
+    gst_test_clock_crank (testclock);
+    g_thread_yield ();
+  }
+  fail_unless (stats != NULL);
+
+  source_stats =
+      g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
+  fail_unless (source_stats);
+
+  for (i = 0; i < source_stats->n_values; i++) {
+    GstStructure *s =
+        g_value_get_boxed (g_value_array_get_nth (source_stats, i));
+    gboolean internal;
+    gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
+    if (!internal) {
+      GstClockTime avg_tdur, max_tdur;
+      gst_structure_get (s,
+          "avg-frame-transmission-duration", G_TYPE_UINT64, &avg_tdur,
+          "max-frame-transmission-duration", G_TYPE_UINT64, &max_tdur, NULL);
+      /* the reordered packet will be ignored by stats becuase of
+       * simplicity */
+      fail_unless_equals_int (max_tdur, 50 * GST_MSECOND);
+      fail_unless_equals_int (avg_tdur, (0 + 1023 * 50 * GST_MSECOND) / 1024);
+      stats_verified = TRUE;
+      break;
+    }
+  }
+  fail_unless (stats_verified);
+
+  gst_structure_free (stats);
+
+  gst_caps_unref (caps);
+  gst_object_unref (testclock);
+  gst_object_unref (rtpsession);
+  gst_harness_teardown (h_rtp);
+  gst_harness_teardown (h);
+
+  /* Reset to default system clock */
+  gst_system_clock_set_default (NULL);
+}
+
+GST_START_TEST (test_stats_transmission_duration_reordering)
+{
+  test_stats_transmission_duration_reordering_impl (FALSE);
+}
+GST_END_TEST;
+
+GST_START_TEST (test_stats_transmission_duration_reordering_with_twcc_interval)
+{
+  test_stats_transmission_duration_reordering_impl (TRUE);
+}
 GST_END_TEST;
 
 /********************* TWCC-tests *********************/
@@ -4265,7 +5507,7 @@ typedef struct
 static TWCCFeedbackIntervalCtx test_twcc_feedback_interval_ctx[] = {
   {50 * GST_MSECOND, 21, 10 * GST_MSECOND, 4},
   {50 * GST_MSECOND, 16, 7 * GST_MSECOND, 2},
-  {50 * GST_MSECOND, 16, 66 * GST_MSECOND, 15},
+  {50 * GST_MSECOND, 16, 66 * GST_MSECOND, 16},
   {50 * GST_MSECOND, 15, 33 * GST_MSECOND, 9},
 };
 
@@ -4274,22 +5516,166 @@ GST_START_TEST (test_twcc_feedback_interval)
   SessionHarness *h = session_harness_new ();
   GstBuffer *buf;
   TWCCFeedbackIntervalCtx *ctx = &test_twcc_feedback_interval_ctx[__i__];
+  GstClockTime ts, next_feedback_time, last_twcc_time, inter_arrival_sum;
+  GstClockTime expected_inter_arrival_sum;
+  guint feedback_received = 0;
 
   session_harness_set_twcc_recv_ext_id (h, TEST_TWCC_EXT_ID);
   g_object_set (h->internal_session, "twcc-feedback-interval", ctx->interval,
       NULL);
 
+  ts = gst_clock_get_time (GST_CLOCK_CAST (h->testclock));
+  next_feedback_time = ts + ctx->interval;
+  last_twcc_time = GST_CLOCK_TIME_NONE;
+  inter_arrival_sum = 0;
+
   for (guint i = 0; i < ctx->num_packets; i++) {
-    GstClockTime ts = i * ctx->ts_delta;
-    gst_test_clock_set_time ((h->testclock), ts);
+    /* Advance to last TWCC interval before ts */
+    while (next_feedback_time < ts) {
+      session_harness_crank_clock (h);
+      gst_test_clock_wait_for_next_pending_id (h->testclock, NULL);
+      next_feedback_time += ctx->interval;
+    }
+
+    /* Advance time, if we haven't already gone past it */
+    if (ts > gst_clock_get_time (GST_CLOCK_CAST (h->testclock)))
+      gst_test_clock_set_time ((h->testclock), ts);
+
+    /* Push recv RTP */
     fail_unless_equals_int (GST_FLOW_OK,
         session_harness_recv_rtp (h, generate_twcc_recv_buffer (i, ts, FALSE)));
+
+    if (next_feedback_time <= ts + ctx->ts_delta) {
+      GstClockTime now;
+
+      /* We expect a feedback report */
+      buf = session_harness_produce_twcc (h);
+      gst_buffer_unref (buf);
+
+      /* Time will have advanced to the feedback send time */
+      now = gst_clock_get_time (GST_CLOCK_CAST (h->testclock));
+      if (GST_CLOCK_TIME_IS_VALID (last_twcc_time))
+        inter_arrival_sum += (now - last_twcc_time);
+      last_twcc_time = now;
+      feedback_received += 1;
+
+      /* Compute next expected feedback time */
+      next_feedback_time += ctx->interval;
+    }
+
+    ts += ctx->ts_delta;
   }
 
-  for (guint i = 0; i < ctx->num_feedback; i++) {
-    buf = session_harness_produce_twcc (h);
-    gst_buffer_unref (buf);
+  /* Compute expected inter-arrival sum for feedback reports */
+  if (ctx->ts_delta <= ctx->interval) {
+    /* Easy case: delta between packets is less than the feedback interval.
+     * In this case we expect the feedback reports to be continuous and
+     * spaced at the specified interval
+     */
+    expected_inter_arrival_sum = (ctx->num_feedback - 1) * ctx->interval;
+  } else {
+    /* Inter-packet delta is more than the feedback interval.
+     * In this case we expect gaps in the feedback stream (because we do
+     * not send empty feedback reports) and thus the sum of deltas between
+     * feedback reports must be equal to the next multiple of the feedback
+     * interval after the time at which the last packet is sent
+     */
+    expected_inter_arrival_sum = ((ctx->num_feedback - 1) * ctx->ts_delta) /
+        ctx->interval * ctx->interval;
   }
+
+  /* Ensure we got the reports we expected, spaced correctly */
+  g_assert_cmpint (feedback_received, ==, ctx->num_feedback);
+  g_assert_cmpint (inter_arrival_sum, ==, expected_inter_arrival_sum);
+
+  session_harness_free (h);
+}
+
+GST_END_TEST;
+
+GST_START_TEST (test_rtcp_timing_with_twcc_feedback_interval)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
+  GstRTCPPacket rtcp_packet;
+  guint32 twcc_interval_in_rtptime;
+  guint32 rtptime, last_rtptime;
+  guint32 ssrc;
+  gboolean ret;
+
+  g_object_set (h->internal_session,
+      "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+
+  twcc_interval_in_rtptime = gst_util_uint64_scale_int (50 * GST_MSECOND,
+      TEST_BUF_CLOCK_RATE, GST_SECOND);
+
+  /* push a buffer to establish an internal source */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
+
+  /* Receive a RTP buffer from the wire */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+
+  /* Wait for first regular RTCP to be sent */
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  fail_unless_equals_int (2, gst_rtcp_buffer_get_packet_count (&rtcp));
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+
+  /* first a Sender Report */
+  fail_unless_equals_int (GST_RTCP_TYPE_SR,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, &rtptime,
+      NULL, NULL);
+  fail_unless_equals_int (0xDEADBEEF, ssrc);
+  /* Expect SR time to be (long) after the TWCC interval (we don't
+   * alter the default RTCP interval in this test, so the initial feedback
+   * should appear after at least a second has elapsed, which is far in
+   * excess of the TWCC interval we configure) */
+  fail_unless (rtptime > twcc_interval_in_rtptime);
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* then a SDES */
+  fail_unless_equals_int (GST_RTCP_TYPE_SDES,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_buffer_unref (buf);
+
+  last_rtptime = rtptime;
+
+  /* Request early RTCP */
+  g_signal_emit_by_name (h->internal_session, "send-rtcp-full", GST_SECOND, &ret);
+  fail_unless (ret);
+
+  /* Expect RTCP to appear */
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
+  fail_unless_equals_int (2, gst_rtcp_buffer_get_packet_count (&rtcp));
+  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
+
+  /* first a Sender Report */
+  fail_unless_equals_int (GST_RTCP_TYPE_SR,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+  gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, &rtptime,
+      NULL, NULL);
+  fail_unless_equals_int (0xDEADBEEF, ssrc);
+  /* Expect SR time to be the same as before */
+  fail_unless_equals_int (last_rtptime, rtptime);
+  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
+
+  /* then a SDES */
+  fail_unless_equals_int (GST_RTCP_TYPE_SDES,
+      gst_rtcp_packet_get_type (&rtcp_packet));
+
+  gst_rtcp_buffer_unmap (&rtcp);
+  gst_buffer_unref (buf);
 
   session_harness_free (h);
 }
@@ -4468,453 +5854,6 @@ GST_START_TEST (test_twcc_run_length_min)
 
 GST_END_TEST;
 
-GST_START_TEST (test_send_rtcp_instantly)
-{
-  SessionHarness *h = session_harness_new ();
-  gboolean ret;
-  const GstClockTime now = 123456789;
-
-  /* advance the clock to "now" */
-  gst_test_clock_set_time (h->testclock, now);
-
-  /* verify the RTCP thread has not started */
-  fail_unless_equals_int (0, gst_test_clock_peek_id_count (h->testclock));
-  /* and that no RTCP has been pushed */
-  fail_unless_equals_int (0, gst_harness_buffers_in_queue (h->rtcp_h));
-
-  /* then ask explicitly to send RTCP with 0 timeout (now!) */
-  g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
-  /* this is TRUE due to ? */
-  fail_unless (ret == TRUE);
-
-  /* "crank" and verify RTCP now was sent */
-  session_harness_crank_clock (h);
-  gst_buffer_unref (session_harness_pull_rtcp (h));
-
-  /* and check the time is "now" */
-  fail_unless_equals_int64 (now, gst_clock_get_time (GST_CLOCK (h->testclock)));
-
-  session_harness_free (h);
-}
-
-GST_END_TEST;
-
-GST_START_TEST (test_send_bye_signal)
-{
-  SessionHarness *h = session_harness_new ();
-  GstBuffer *buf;
-  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
-  GstRTCPPacket rtcp_packet;
-  guint32 ssrc;
-
-  /* push a buffer to establish an internal source */
-  fail_unless_equals_int (GST_FLOW_OK,
-      session_harness_send_rtp (h, generate_test_buffer (0, 0xDEADBEEF)));
-
-  /* emit the signal to signal bye on all sources */
-  g_signal_emit_by_name (h->session, "send-bye");
-
-  session_harness_produce_rtcp (h, 1);
-  buf = session_harness_pull_rtcp (h);
-
-  fail_unless (gst_rtcp_buffer_validate (buf));
-  gst_rtcp_buffer_map (buf, GST_MAP_READ, &rtcp);
-  /* our RTCP buffer has 3 packets */
-  fail_unless_equals_int (3, gst_rtcp_buffer_get_packet_count (&rtcp));
-
-  /* first a Sender Report */
-  fail_unless (gst_rtcp_buffer_get_first_packet (&rtcp, &rtcp_packet));
-  fail_unless_equals_int (GST_RTCP_TYPE_SR,
-      gst_rtcp_packet_get_type (&rtcp_packet));
-  gst_rtcp_packet_sr_get_sender_info (&rtcp_packet, &ssrc, NULL, NULL,
-      NULL, NULL);
-  fail_unless_equals_int (0xDEADBEEF, ssrc);
-  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
-
-  /* then a SDES */
-  fail_unless_equals_int (GST_RTCP_TYPE_SDES,
-      gst_rtcp_packet_get_type (&rtcp_packet));
-  fail_unless_equals_int (0xDEADBEEF,
-      gst_rtcp_packet_sdes_get_ssrc (&rtcp_packet));
-  fail_unless (gst_rtcp_packet_move_to_next (&rtcp_packet));
-
-  /* and finally the BYE we asked for */
-  fail_unless_equals_int (GST_RTCP_TYPE_BYE,
-      gst_rtcp_packet_get_type (&rtcp_packet));
-
-  gst_rtcp_buffer_unmap (&rtcp);
-  gst_buffer_unref (buf);
-  session_harness_free (h);
-}
-
-GST_END_TEST;
-
-GST_START_TEST (test_stats_rtcp_with_multiple_rb)
-{
-  SessionHarness *h = session_harness_new ();
-  guint j, k;
-  GstFlowReturn res;
-  GstRTCPPacket packet;
-  gint internal_stats_entries;
-  GstBuffer *buf = NULL;
-  GstStructure *stats = NULL;
-  GValueArray *source_stats = NULL;
-  GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
-
-  /* Push RTP from our send SSRCs */
-  for (j = 0; j < 5; j++) {     /* packets per ssrc */
-    for (k = 0; k < 2; k++) {   /* number of ssrcs */
-      buf = generate_test_buffer (j, 10000 + k);
-      res = session_harness_send_rtp (h, buf);
-      fail_unless_equals_int (GST_FLOW_OK, res);
-    }
-  }
-
-  /* Push RTCP RR with 2 RBs corresponding to our send SSRCs */
-  buf = gst_rtcp_buffer_new (1000);
-  fail_unless (gst_rtcp_buffer_map (buf, GST_MAP_READWRITE, &rtcp));
-  fail_unless (gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_RR, &packet));
-  gst_rtcp_packet_rr_set_ssrc (&packet, 20000);
-  for (k = 0; k < 2; k++) {
-    guint32 ssrc = 10000 + k;
-    guint32 jitter = (ssrc % 2) + 10;
-    gst_rtcp_packet_add_rb (&packet, 10000 + k, /* ssrc */
-        0,                      /* fractionlost */
-        0,                      /* packetslost */
-        4,                      /* exthighestseq */
-        jitter,                 /* jitter */
-        0,                      /* lsr */
-        0);                     /* dlsr */
-  }
-  gst_rtcp_buffer_unmap (&rtcp);
-  fail_unless_equals_int (GST_FLOW_OK, session_harness_recv_rtcp (h, buf));
-
-  /* Check that the stats reflect the data we received in RTCP */
-  internal_stats_entries = 0;
-  g_object_get (h->session, "stats", &stats, NULL);
-  fail_unless (stats != NULL);
-  source_stats =
-      g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
-  fail_unless (source_stats != NULL);
-  for (j = 0; j < source_stats->n_values; j++) {
-    guint32 ssrc;
-    gboolean internal;
-    GstStructure *s =
-        g_value_get_boxed (g_value_array_get_nth (source_stats, j));
-    fail_unless (gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal,
-            "ssrc", G_TYPE_UINT, &ssrc, NULL));
-    if (internal) {
-      gboolean have_rb;
-      guint rb_fractionlost;
-      gint rb_packetslost;
-      guint rb_exthighestseq;
-      guint rb_jitter;
-      guint rb_lsr;
-      guint rb_dlsr;
-
-      fail_unless_equals_int (ssrc, 10000 + internal_stats_entries);
-
-      fail_unless (gst_structure_get (s,
-              "have-rb", G_TYPE_BOOLEAN, &have_rb,
-              "rb-fractionlost", G_TYPE_UINT, &rb_fractionlost,
-              "rb-packetslost", G_TYPE_INT, &rb_packetslost,
-              "rb-exthighestseq", G_TYPE_UINT, &rb_exthighestseq,
-              "rb-jitter", G_TYPE_UINT, &rb_jitter,
-              "rb-lsr", G_TYPE_UINT, &rb_lsr,
-              "rb-dlsr", G_TYPE_UINT, &rb_dlsr, NULL));
-      fail_unless (have_rb);
-      fail_unless_equals_int (rb_fractionlost, 0);
-      fail_unless_equals_int (rb_packetslost, 0);
-      fail_unless_equals_int (rb_exthighestseq, 4);
-      fail_unless_equals_int (rb_jitter, (ssrc % 2) + 10);
-      fail_unless_equals_int (rb_lsr, 0);
-      fail_unless_equals_int (rb_dlsr, 0);
-      internal_stats_entries++;
-    } else {
-      fail_unless_equals_int (ssrc, 20000);
-    }
-  }
-  fail_unless_equals_int (internal_stats_entries, 2);
-
-  gst_structure_free (stats);
-  session_harness_free (h);
-}
-
-GST_END_TEST;
-
-static void
-count_report_stats (G_GNUC_UNUSED GObject * object,
-    G_GNUC_UNUSED GParamSpec * spec, gint * counter)
-{
-  *counter += 1;
-}
-
-static void
-on_sending_rtcp_add_new_if_empty (G_GNUC_UNUSED GObject * rtpsession,
-    GstBuffer * rtcp_buffer, G_GNUC_UNUSED gboolean is_early,
-    G_GNUC_UNUSED gpointer user_data)
-{
-  if (gst_buffer_get_size (rtcp_buffer) == 0) {
-    GstRTCPPacket packet;
-    GstRTCPBuffer rtcp = GST_RTCP_BUFFER_INIT;
-
-    gst_rtcp_buffer_map (rtcp_buffer, GST_MAP_READWRITE, &rtcp);
-
-    gst_rtcp_buffer_add_packet (&rtcp, GST_RTCP_TYPE_APP, &packet);
-    gst_rtcp_packet_app_set_subtype (&packet, 1);
-    gst_rtcp_packet_app_set_ssrc (&packet, 0x12345678);
-    gst_rtcp_packet_app_set_name (&packet, "foo");
-
-    gst_rtcp_buffer_unmap (&rtcp);
-  }
-}
-
-GST_START_TEST (test_report_stats_only_on_regular_rtcp)
-{
-  SessionHarness *h = session_harness_new ();
-  gint stats_callback_count = 0;
-  gint i;
-
-  g_object_set (h->internal_session, "probation", 1, "rtcp-reduced-size", TRUE,
-      "stats-notify-min-interval", 3000, NULL);
-  g_signal_connect (h->session, "notify::stats",
-      G_CALLBACK (count_report_stats), &stats_callback_count);
-
-  /* Not allowed to send empty packets, so need to add feedback */
-  g_signal_connect (h->internal_session, "on-sending-rtcp",
-      G_CALLBACK (on_sending_rtcp_add_new_if_empty), NULL);
-
-  fail_unless_equals_int (GST_FLOW_OK,
-      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
-
-  session_harness_produce_rtcp (h, 1);
-  gst_buffer_unref (session_harness_pull_rtcp (h));
-  fail_unless_equals_int (stats_callback_count, 1);
-
-  /* send 10 rtcp-packets that should *not* generate stats */
-  for (i = 0; i < 10; i++) {
-    gboolean ret;
-    g_signal_emit_by_name (h->internal_session, "send-rtcp-full", 0, &ret);
-    session_harness_advance_and_crank (h, 10 * GST_MSECOND);
-  }
-
-  /* verify we have generated less than 3 stats for all these packets */
-  fail_unless (stats_callback_count < 3);
-
-  session_harness_free (h);
-}
-
-GST_END_TEST;
-
-static void
-copy_stats (GObject * object, G_GNUC_UNUSED GParamSpec * spec,
-    GstStructure ** stats)
-{
-  g_object_get (object, "stats", stats, NULL);
-}
-
-static GstCaps *
-rtpsession_request_pt_map (G_GNUC_UNUSED GstElement * element,
-    G_GNUC_UNUSED guint pt, GstCaps * caps)
-{
-  return gst_caps_copy (caps);
-}
-
-GST_START_TEST (test_stats_transmission_duration)
-{
-  GstTestClock *testclock = GST_TEST_CLOCK (gst_test_clock_new ());
-  GstElement *rtpsession;
-  GstHarness *h, *h_rtp;
-  GstStructure *stats = NULL;
-  GValueArray *source_stats;
-  gboolean stats_verified = FALSE;
-  GstCaps *caps = generate_caps ();
-  guint i;
-
-  /* use testclock as the systemclock to capture the rtcp thread waits */
-  gst_system_clock_set_default (GST_CLOCK (testclock));
-
-  h = gst_harness_new_with_padnames ("rtpsession",
-      "recv_rtcp_sink", "send_rtcp_src");
-  h_rtp = gst_harness_new_with_element (h->element,
-      "recv_rtp_sink", "recv_rtp_src");
-
-  g_signal_connect (h->element, "notify::stats", G_CALLBACK (copy_stats),
-      &stats);
-  g_signal_connect (h->element, "request-pt-map",
-      G_CALLBACK (rtpsession_request_pt_map), caps);
-
-  /* Set probation=1 so that first packet is pushed through immediately. Makes
-   * test simpler. */
-  g_object_get (h->element, "internal-session", &rtpsession, NULL);
-  g_object_set (rtpsession, "probation", 1, NULL);
-
-  gst_harness_set_src_caps_str (h_rtp, "application/x-rtp");
-
-  /* first frame has transmission duration of 20 ms */
-  gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (0 * GST_MSECOND,
-          0, 0 * TEST_BUF_CLOCK_RATE / 10));
-
-  gst_test_clock_set_time (testclock, 10 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (10 * GST_MSECOND,
-          1, 0 * TEST_BUF_CLOCK_RATE / 10));
-
-  gst_test_clock_set_time (testclock, 20 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (20 * GST_MSECOND,
-          2, 0 * TEST_BUF_CLOCK_RATE / 10));
-
-  /* second frame has transmission duration of 0 ms */
-  gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (100 * GST_MSECOND,
-          3, 1 * TEST_BUF_CLOCK_RATE / 10));
-
-  /* need third frame to register that second frame is finished */
-  gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (200 * GST_MSECOND,
-          4, 2 * TEST_BUF_CLOCK_RATE / 10));
-
-  /* crank to get the stats */
-  gst_test_clock_crank (testclock);
-  while (stats == NULL)
-    g_thread_yield ();
-  fail_unless (stats != NULL);
-
-  source_stats =
-      g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
-  fail_unless (source_stats);
-
-  for (i = 0; i < source_stats->n_values; i++) {
-    GstStructure *s =
-        g_value_get_boxed (g_value_array_get_nth (source_stats, i));
-    gboolean internal;
-    gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
-    if (!internal) {
-      GstClockTime avg_tdur, max_tdur;
-      gst_structure_get (s,
-          "avg-frame-transmission-duration", G_TYPE_UINT64, &avg_tdur,
-          "max-frame-transmission-duration", G_TYPE_UINT64, &max_tdur, NULL);
-      fail_unless_equals_int (max_tdur, 20 * GST_MSECOND);
-      fail_unless_equals_int (avg_tdur, (0 + 1023 * 20 * GST_MSECOND) / 1024);
-      stats_verified = TRUE;
-      break;
-    }
-  }
-  fail_unless (stats_verified);
-
-  gst_structure_free (stats);
-
-  gst_caps_unref (caps);
-  gst_object_unref (testclock);
-  gst_object_unref (rtpsession);
-  gst_harness_teardown (h_rtp);
-  gst_harness_teardown (h);
-
-  /* Reset to default system clock */
-  gst_system_clock_set_default (NULL);
-}
-
-GST_END_TEST;
-
-GST_START_TEST (test_stats_transmission_duration_reordering)
-{
-  GstTestClock *testclock = GST_TEST_CLOCK (gst_test_clock_new ());
-  GstElement *rtpsession;
-  GstHarness *h, *h_rtp;
-  GstStructure *stats = NULL;
-  GValueArray *source_stats;
-  gboolean stats_verified = FALSE;
-  GstCaps *caps = generate_caps ();
-  guint i;
-
-  /* use testclock as the systemclock to capture the rtcp thread waits */
-  gst_system_clock_set_default (GST_CLOCK (testclock));
-
-  h = gst_harness_new_with_padnames ("rtpsession",
-      "recv_rtcp_sink", "send_rtcp_src");
-  h_rtp = gst_harness_new_with_element (h->element,
-      "recv_rtp_sink", "recv_rtp_src");
-
-  g_signal_connect (h->element, "notify::stats", G_CALLBACK (copy_stats),
-      &stats);
-  g_signal_connect (h->element, "request-pt-map",
-      G_CALLBACK (rtpsession_request_pt_map), caps);
-
-  /* Set probation=1 so that first packet is pushed through immediately. Makes
-   * test simpler. */
-  g_object_get (h->element, "internal-session", &rtpsession, NULL);
-  g_object_set (rtpsession, "probation", 1, NULL);
-
-  gst_harness_set_src_caps_str (h_rtp, "application/x-rtp");
-
-  /* first frame has transmission duration of 20 ms */
-  gst_test_clock_set_time (testclock, 0 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (0 * GST_MSECOND,
-          0, 0 * TEST_BUF_CLOCK_RATE / 10));
-
-  gst_test_clock_set_time (testclock, 50 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (50 * GST_MSECOND,
-          1, 0 * TEST_BUF_CLOCK_RATE / 10));
-
-  /* second frame comes before last packet of previous frame  */
-  gst_test_clock_set_time (testclock, 100 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (100 * GST_MSECOND,
-          3, 1 * TEST_BUF_CLOCK_RATE / 10));
-
-  /* last packet of first frame arrives */
-  gst_test_clock_set_time (testclock, 110 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (110 * GST_MSECOND,
-          2, 0 * TEST_BUF_CLOCK_RATE / 10));
-
-  /* need third frame to register that second frame is finished */
-  gst_test_clock_set_time (testclock, 200 * GST_MSECOND);
-  gst_harness_push (h_rtp, generate_test_buffer_timed (200 * GST_MSECOND,
-          4, 2 * TEST_BUF_CLOCK_RATE / 10));
-
-  /* crank to get the stats */
-  gst_test_clock_crank (testclock);
-  while (stats == NULL)
-    g_thread_yield ();
-  fail_unless (stats != NULL);
-
-  source_stats =
-      g_value_get_boxed (gst_structure_get_value (stats, "source-stats"));
-  fail_unless (source_stats);
-
-  for (i = 0; i < source_stats->n_values; i++) {
-    GstStructure *s =
-        g_value_get_boxed (g_value_array_get_nth (source_stats, i));
-    gboolean internal;
-    gst_structure_get (s, "internal", G_TYPE_BOOLEAN, &internal, NULL);
-    if (!internal) {
-      GstClockTime avg_tdur, max_tdur;
-      gst_structure_get (s,
-          "avg-frame-transmission-duration", G_TYPE_UINT64, &avg_tdur,
-          "max-frame-transmission-duration", G_TYPE_UINT64, &max_tdur, NULL);
-      /* the reordered packet will be ignored by stats becuase of
-       * simplicity */
-      fail_unless_equals_int (max_tdur, 50 * GST_MSECOND);
-      fail_unless_equals_int (avg_tdur, (0 + 1023 * 50 * GST_MSECOND) / 1024);
-      stats_verified = TRUE;
-      break;
-    }
-  }
-  fail_unless (stats_verified);
-
-  gst_structure_free (stats);
-
-  gst_caps_unref (caps);
-  gst_object_unref (testclock);
-  gst_object_unref (rtpsession);
-  gst_harness_teardown (h_rtp);
-  gst_harness_teardown (h);
-
-  /* Reset to default system clock */
-  gst_system_clock_set_default (NULL);
-}
-
-GST_END_TEST;
-
 
 static Suite *
 rtpsession_suite (void)
@@ -4924,44 +5863,106 @@ rtpsession_suite (void)
 
   suite_add_tcase (s, tc_chain);
   tcase_add_test (tc_chain, test_multiple_ssrc_rr);
+  tcase_add_test (tc_chain, test_multiple_ssrc_rr_with_twcc_interval);
   tcase_add_test (tc_chain, test_multiple_senders_roundrobin_rbs);
+  tcase_add_test (tc_chain,
+      test_multiple_senders_roundrobin_rbs_with_twcc_interval);
   tcase_add_test (tc_chain, test_no_rbs_for_internal_senders);
+  tcase_add_test (tc_chain,
+      test_no_rbs_for_internal_senders_with_twcc_interval);
   tcase_add_test (tc_chain, test_internal_sources_timeout);
+  tcase_add_test (tc_chain, test_internal_sources_timeout_with_twcc_interval);
   tcase_add_test (tc_chain, test_receive_rtcp_app_packet);
+  tcase_add_test (tc_chain, test_receive_rtcp_app_packet_with_twcc_interval);
   tcase_add_test (tc_chain, test_dont_lock_on_stats);
+  tcase_add_test (tc_chain, test_dont_lock_on_stats_with_twcc_interval);
   tcase_add_test (tc_chain, test_ignore_suspicious_bye);
+  tcase_add_test (tc_chain, test_ignore_suspicious_bye_with_twcc_interval);
 
   tcase_add_test (tc_chain, test_ssrc_collision_when_sending);
+  tcase_add_test (tc_chain,
+      test_ssrc_collision_when_sending_with_twcc_interval);
   tcase_add_test (tc_chain, test_ssrc_collision_when_sending_loopback);
+  tcase_add_test (tc_chain,
+      test_ssrc_collision_when_sending_loopback_with_twcc_interval);
   tcase_add_test (tc_chain, test_ssrc_collision_when_receiving);
+  tcase_add_test (tc_chain,
+      test_ssrc_collision_when_receiving_with_twcc_interval);
   tcase_add_test (tc_chain, test_ssrc_collision_third_party);
+  tcase_add_test (tc_chain, test_ssrc_collision_third_party_with_twcc_interval);
   tcase_add_test (tc_chain, test_ssrc_collision_third_party_disable);
+  tcase_add_test (tc_chain,
+      test_ssrc_collision_third_party_disable_with_twcc_interval);
   tcase_add_test (tc_chain, test_ssrc_collision_third_party_favor_new);
   tcase_add_test (tc_chain,
+      test_ssrc_collision_third_party_favor_new_with_twcc_interval);
+  tcase_add_test (tc_chain,
       test_ssrc_collision_never_send_on_non_internal_source);
+  tcase_add_test (tc_chain,
+      test_ssrc_collision_never_send_on_non_internal_source_with_twcc_interval);
 
   tcase_add_test (tc_chain, test_request_fir);
+  tcase_add_test (tc_chain, test_request_fir_with_twcc_interval);
   tcase_add_test (tc_chain, test_request_pli);
+  tcase_add_test (tc_chain, test_request_pli_with_twcc_interval);
   tcase_add_test (tc_chain, test_request_fir_after_pli_in_caps);
+  tcase_add_test (tc_chain,
+      test_request_fir_after_pli_in_caps_with_twcc_interval);
   tcase_add_test (tc_chain, test_request_nack);
+  tcase_add_test (tc_chain, test_request_nack_with_twcc_interval);
   tcase_add_test (tc_chain, test_request_nack_surplus);
+  tcase_add_test (tc_chain, test_request_nack_surplus_with_twcc_interval);
   tcase_add_test (tc_chain, test_request_nack_packing);
+  tcase_add_test (tc_chain, test_request_nack_packing_with_twcc_interval);
   tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet);
+  tcase_add_test (tc_chain, test_illegal_rtcp_fb_packet_with_twcc_interval);
   tcase_add_test (tc_chain, test_illegal_rtcp_type_packet);
+  tcase_add_test (tc_chain, test_illegal_rtcp_type_packet_with_twcc_interval);
   tcase_add_test (tc_chain, test_feedback_rtcp_race);
+  tcase_add_test (tc_chain, test_feedback_rtcp_race_with_twcc_interval);
   tcase_add_test (tc_chain, test_receive_regular_pli);
+  tcase_add_test (tc_chain, test_receive_regular_pli_with_twcc_interval);
   tcase_add_test (tc_chain, test_receive_pli_no_sender_ssrc);
+  tcase_add_test (tc_chain, test_receive_pli_no_sender_ssrc_with_twcc_interval);
   tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle);
+  tcase_add_test (tc_chain, test_dont_send_rtcp_while_idle_with_twcc_interval);
   tcase_add_test (tc_chain, test_send_rtcp_when_signalled);
+  tcase_add_test (tc_chain, test_send_rtcp_when_signalled_with_twcc_interval);
   tcase_add_test (tc_chain, test_change_sent_sdes);
+  tcase_add_test (tc_chain, test_change_sent_sdes_with_twcc_interval);
   tcase_add_test (tc_chain, test_disable_sr_timestamp);
+  tcase_add_test (tc_chain, test_disable_sr_timestamp_with_twcc_interval);
   tcase_add_test (tc_chain, test_on_sending_nacks);
+  tcase_add_test (tc_chain, test_on_sending_nacks_with_twcc_interval);
   tcase_add_test (tc_chain, test_disable_probation);
+  tcase_add_test (tc_chain, test_disable_probation_with_twcc_interval);
   tcase_add_test (tc_chain, test_request_late_nack);
+  tcase_add_test (tc_chain, test_request_late_nack_with_twcc_interval);
   tcase_add_test (tc_chain, test_clear_pt_map_stress);
+  tcase_add_test (tc_chain, test_clear_pt_map_stress_with_twcc_interval);
   tcase_add_test (tc_chain, test_packet_rate);
+  tcase_add_test (tc_chain, test_packet_rate_with_twcc_interval);
   tcase_add_test (tc_chain, test_stepped_packet_rate);
+  tcase_add_test (tc_chain, test_stepped_packet_rate_with_twcc_interval);
   tcase_add_test (tc_chain, test_creating_srrr);
+  tcase_add_test (tc_chain, test_creating_srrr_with_twcc_interval);
+
+  tcase_add_test (tc_chain, test_send_rtcp_instantly);
+  tcase_add_test (tc_chain, test_send_rtcp_instantly_with_twcc_interval);
+  tcase_add_test (tc_chain, test_send_bye_signal);
+  tcase_add_test (tc_chain, test_send_bye_signal_with_twcc_interval);
+  tcase_skip_broken_test (tc_chain, test_stats_rtcp_with_multiple_rb);
+  tcase_skip_broken_test (tc_chain,
+      test_stats_rtcp_with_multiple_rb_with_twcc_interval);
+  tcase_add_test (tc_chain, test_report_stats_only_on_regular_rtcp);
+  tcase_add_test (tc_chain,
+      test_report_stats_only_on_regular_rtcp_with_twcc_interval);
+  tcase_add_test (tc_chain, test_stats_transmission_duration);
+  tcase_add_test (tc_chain,
+      test_stats_transmission_duration_with_twcc_interval);
+  tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
+  tcase_add_test (tc_chain,
+      test_stats_transmission_duration_reordering_with_twcc_interval);
 
   /* twcc */
   tcase_add_loop_test (tc_chain, test_twcc_header_and_run_length,
@@ -4994,15 +5995,10 @@ rtpsession_suite (void)
   tcase_add_test (tc_chain, test_twcc_send_and_recv);
   tcase_add_loop_test (tc_chain, test_twcc_feedback_interval, 0,
       G_N_ELEMENTS (test_twcc_feedback_interval_ctx));
+  tcase_add_test (tc_chain, test_rtcp_timing_with_twcc_feedback_interval);
   tcase_add_test (tc_chain, test_twcc_feedback_count_wrap);
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
 
-  tcase_add_test (tc_chain, test_send_rtcp_instantly);
-  tcase_add_test (tc_chain, test_send_bye_signal);
-  tcase_skip_broken_test (tc_chain, test_stats_rtcp_with_multiple_rb);
-  tcase_add_test (tc_chain, test_report_stats_only_on_regular_rtcp);
-  tcase_add_test (tc_chain, test_stats_transmission_duration);
-  tcase_add_test (tc_chain, test_stats_transmission_duration_reordering);
   return s;
 }
 
