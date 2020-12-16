@@ -84,6 +84,7 @@ pex_isas = [
 vpx_args = [
   '-DHAVE_VPX_1_3',
   '-DHAVE_VPX_1_4',
+  '-DHAVE_VPX_1_8',
   '-DHAVE_VP8_ENCODER',
   '-DHAVE_VP8_DECODER',
   '-DHAVE_VP9_ENCODER',
