@@ -2456,7 +2456,8 @@ insert_lost_event (GstRtpJitterBuffer * jitterbuffer,
             "seqnum", G_TYPE_UINT, (guint) seqnum,
             "timestamp", G_TYPE_UINT64, timestamp,
             "duration", G_TYPE_UINT64, duration,
-            "retry", G_TYPE_UINT, num_rtx_retry, NULL));
+            "retry", G_TYPE_UINT, num_rtx_retry,
+            "count", G_TYPE_UINT, lost_packets, NULL));
   }
   if (rtp_jitter_buffer_append_lost_event (priv->jbuf,
           event, seqnum, lost_packets))
