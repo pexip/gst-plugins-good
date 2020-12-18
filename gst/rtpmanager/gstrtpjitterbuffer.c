@@ -4023,7 +4023,7 @@ do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
    */
   timeout = timer->rtx_last + rtx_retry_timeout;
   GST_DEBUG_OBJECT (jitterbuffer,
-      "timer #%i new timeout %" GST_TIME_FORMAT ", rtx retry timeout%"
+      "timer #%i new timeout %" GST_TIME_FORMAT ", rtx retry timeout %"
       GST_TIME_FORMAT ", num_retry %u", timer->seqnum, GST_TIME_ARGS (timeout),
       GST_TIME_ARGS (rtx_retry_timeout), timer->num_rtx_retry);
   if ((priv->rtx_max_retries != -1
