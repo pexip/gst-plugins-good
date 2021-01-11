@@ -358,9 +358,15 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     goto too_small;
 
   frame_start = (s_bit == 1) && (part_id == 0);
+  // Detected the start of a new frame
   if (frame_start) {
+    // If we still in a state of self->started == true
+    // that means we never saw the end of the frame.
+    // So this case is cosidered to be a GAP (incomlete frame)
+    // (TODO Check if it is possible if baseclass already detected GAP
+    // and set DISCONT in a buffer)
     if (G_UNLIKELY (self->started)) {
-      GST_DEBUG_OBJECT (depay, "Incomplete frame, flushing adapter");
+      GST_ERROR_OBJECT (depay, "Incomplete frame, flushing adapter");
       gst_adapter_clear (self->adapter);
       self->started = FALSE;
 
@@ -369,15 +375,42 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
           "Incomplete frame detected");
       sent_lost_event = TRUE;
     }
+    // Actually send GAP event if baseclass already detected GAP
+    // and set DISCONT in a buffer
+    else if (GST_BUFFER_IS_DISCONT (rtp->buffer)) {
+      GST_ERROR_OBJECT (depay, "!!!!!!!!! kovals Incomplete frame, flushing adapter");
+      send_new_lost_event (self, GST_BUFFER_PTS (rtp->buffer), picture_id,
+          "Incomplete frame detected");
+      sent_lost_event = TRUE;
+    }
   }
 
+  // Wating for start of the new frame
   if (!self->started) {
+    // If the current buffer is not the start of the frame
+    // we might need to send GAP event (if we didn't sent it yet)
     if (G_UNLIKELY (!frame_start)) {
-      GST_DEBUG_OBJECT (depay,
+      GST_ERROR_OBJECT (depay,
           "The frame is missing the first packet, ignoring the packet");
+      GST_ERROR_OBJECT (depay,
+          "kovals self->stop_lost_events: %d sent_lost_event: %d ", self->stop_lost_events, sent_lost_event);
+      // (TODO Not sure what is self->stop_lost_events means)
+      // Appearently this if case prevent to send GAP events if we already sent them
       if (self->stop_lost_events && !sent_lost_event) {
-        send_last_lost_event (self);
+        GST_ERROR_OBJECT (depay,
+            "kovals self->stop_lost_events = FALSE");
+        // (TODO check if it is correct usage of 'send_new_lost_event' or better to call 'send_last_lost_event')
+        send_new_lost_event (self, GST_BUFFER_PTS (rtp->buffer), picture_id,
+            "Incomplete frame detected");
+        // (TODO check what is 'self->last_lost_event' in send_last_lost_event )
+        //send_last_lost_event (self);
         self->stop_lost_events = FALSE;
+      } else {
+        // (TODO here we might check !sent_lost_event to prevent send GAP events from sendinf if we already sent them)
+        GST_ERROR_OBJECT (depay,
+            "kovals send_new_lost_event");
+        send_new_lost_event (self, GST_BUFFER_PTS (rtp->buffer), picture_id,
+            "Incomplete frame detected");
       }
       goto done;
     }
