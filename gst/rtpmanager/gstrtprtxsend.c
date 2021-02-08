@@ -59,6 +59,9 @@ GST_DEBUG_CATEGORY_STATIC (gst_rtp_rtx_send_debug);
 #define DEFAULT_MAX_BUCKET_SIZE  UNLIMITED_KBPS
 #define DEFAULT_STUFFING_KBPS    UNLIMITED_KBPS
 #define DEFAULT_STUFFING_MAX_BURST UNLIMITED_KBPS
+#define DEFAULT_DO_TWCC FALSE
+
+#define TWCC_EXTMAP_STR "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
 
 enum
 {
@@ -74,6 +77,7 @@ enum
   PROP_MAX_BUCKET_SIZE,
   PROP_STUFFING_KBPS,
   PROP_STUFFING_MAX_BURST,
+  PROP_DO_TWCC,
   PROP_LAST,
 };
 
@@ -135,7 +139,6 @@ buffer_queue_item_free (BufferQueueItem * item)
   gst_buffer_unref (item->buffer);
   g_slice_free (BufferQueueItem, item);
 }
-
 
 typedef struct
 {
@@ -293,6 +296,12 @@ gst_rtp_rtx_send_class_init (GstRtpRtxSendClass * klass)
           "Max allowed rate for bursting stuffing packets (-1 = unlimited)",
           -1, G_MAXINT, DEFAULT_STUFFING_MAX_BURST,
           G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_DO_TWCC,
+      g_param_spec_boolean ("do-twcc", "Do TWCC",
+          "Add TWCC sequencenumbers to RTX-packets for packets that "
+          "already had TWCC sequencenumbers", DEFAULT_DO_TWCC,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gst_element_class_add_static_pad_template (gstelement_class, &src_factory);
   gst_element_class_add_static_pad_template (gstelement_class, &sink_factory);
@@ -481,6 +490,7 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   guint32 ssrc;
   guint16 seqnum;
   guint8 fmtp;
+  gboolean add_twcc_seqnum = FALSE;
 
   gst_rtp_buffer_map (buffer, GST_MAP_READ, &rtp);
 
@@ -491,10 +501,14 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   seqnum = data->next_seqnum++;
   fmtp = GPOINTER_TO_UINT (g_hash_table_lookup (rtx->rtx_pt_map,
           GUINT_TO_POINTER (gst_rtp_buffer_get_payload_type (&rtp))));
-
+  if (rtx->do_twcc && rtx->twcc_ext_id > 0) {
+    /* check for the existence of a TWCC extension header */
+    add_twcc_seqnum = gst_rtp_buffer_get_extension_onebyte_header (&rtp,
+        rtx->twcc_ext_id, 0, NULL, NULL);
+  }
   GST_DEBUG_OBJECT (rtx, "creating rtx buffer, orig seqnum: %u, "
-      "rtx seqnum: %u, rtx ssrc: %X", gst_rtp_buffer_get_seq (&rtp),
-      seqnum, ssrc);
+      "rtx seqnum: %u, rtx ssrc: %X, twcc: %d", gst_rtp_buffer_get_seq (&rtp),
+      seqnum, ssrc, add_twcc_seqnum);
 
   /* gst_rtp_buffer_map does not map the payload so do it now */
   gst_rtp_buffer_get_payload (&rtp);
@@ -540,6 +554,14 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   gst_rtp_buffer_set_ssrc (&new_rtp, ssrc);
   gst_rtp_buffer_set_seq (&new_rtp, seqnum);
   gst_rtp_buffer_set_payload_type (&new_rtp, fmtp);
+  if (add_twcc_seqnum) {
+    guint16 dummy = 0;
+    /* add a dummy twcc seqnum. we will write the right one when exiting
+       the element */
+    gst_rtp_buffer_add_extension_onebyte_header (&new_rtp, rtx->twcc_ext_id,
+        &dummy, 2);
+  }
+
   /* RFC 4588: let other elements do the padding, as normal */
   gst_rtp_buffer_set_padding (&new_rtp, padlen != 0);
   gst_rtp_buffer_unmap (&new_rtp);
@@ -547,7 +569,7 @@ gst_rtp_rtx_buffer_new (GstRtpRtxSend * rtx, GstBuffer * buffer, guint8 padlen)
   /* Copy over timestamps */
   gst_buffer_copy_into (new_buffer, buffer, GST_BUFFER_COPY_TIMESTAMPS, 0, -1);
 
-  /* mark this is a RETRANSMISSION buffer */
+  /* mark this as a RETRANSMISSION buffer */
   GST_BUFFER_FLAG_SET (new_buffer, GST_RTP_BUFFER_FLAG_RETRANSMISSION);
 
   return new_buffer;
@@ -779,6 +801,29 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
   return res;
 }
 
+static guint8
+_get_extmap_id_for_attribute (const GstStructure * s, const gchar * ext_name)
+{
+  guint i;
+  guint8 extmap_id = 0;
+  guint n_fields = gst_structure_n_fields (s);
+
+  for (i = 0; i < n_fields; i++) {
+    const gchar *field_name = gst_structure_nth_field_name (s, i);
+    if (g_str_has_prefix (field_name, "extmap-")) {
+      const gchar *str = gst_structure_get_string (s, field_name);
+      if (str && g_strcmp0 (str, ext_name) == 0) {
+        gint64 id = g_ascii_strtoll (field_name + 7, NULL, 10);
+        if (id > 0 && id < 15) {
+          extmap_id = id;
+          break;
+        }
+      }
+    }
+  }
+  return extmap_id;
+}
+
 static gboolean
 gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
@@ -809,6 +854,9 @@ gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       gst_event_parse_caps (event, &caps);
 
       s = gst_caps_get_structure (caps, 0);
+
+      rtx->twcc_ext_id = _get_extmap_id_for_attribute (s, TWCC_EXTMAP_STR);
+
       if (!gst_structure_get_uint (s, "ssrc", &ssrc))
         ssrc = -1;
       if (!gst_structure_get_int (s, "payload", &payload))
@@ -835,6 +883,8 @@ gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
           payload, GPOINTER_TO_INT (rtx_payload), ssrc, data->rtx_ssrc, caps);
 
       gst_structure_get_int (s, "clock-rate", &data->clock_rate);
+      GST_DEBUG_OBJECT (rtx, "got clock-rate from caps: %d for ssrc: %u",
+          data->clock_rate, ssrc);
 
       caps = gst_caps_copy (caps);
 
@@ -847,8 +897,6 @@ gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
             GPOINTER_TO_INT (rtx_payload), NULL);
       }
 
-      GST_DEBUG_OBJECT (rtx, "got clock-rate from caps: %d for ssrc: %u",
-          data->clock_rate, ssrc);
       GST_OBJECT_UNLOCK (rtx);
 
       gst_event_unref (event);
@@ -1270,6 +1318,11 @@ gst_rtp_rtx_send_get_property (GObject * object,
       g_value_set_int (value, rtx->stuffing_max_burst);
       GST_OBJECT_UNLOCK (rtx);
       break;
+    case PROP_DO_TWCC:
+      GST_OBJECT_LOCK (rtx);
+      g_value_set_boolean (value, rtx->do_twcc);
+      GST_OBJECT_UNLOCK (rtx);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -1307,6 +1360,42 @@ gst_rtp_rtx_reset_bucket_size (GstRtpRtxSend * rtx,
     rtx->bucket_size = max_bucket_size * 1000;
     rtx->prev_time = GST_CLOCK_TIME_NONE;
   }
+}
+
+static GstPadProbeReturn
+twcc_writer_probe_cb (GstPad * srcpad, GstPadProbeInfo * info,
+    gpointer user_data)
+{
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (user_data);
+  GstBuffer *buf = GST_BUFFER_CAST (info->data);
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  gpointer data;
+
+  info->data = buf = gst_buffer_make_writable (buf);
+
+  if (gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp)) {
+    if (rtx->do_twcc &&
+        rtx->twcc_ext_id > 0 &&
+        gst_rtp_buffer_get_extension_onebyte_header (&rtp,
+            rtx->twcc_ext_id, 0, &data, NULL)) {
+      GST_WRITE_UINT16_BE (data, rtx->twcc_seqnum++);
+    }
+    gst_rtp_buffer_unmap (&rtp);
+  }
+  return GST_PAD_PROBE_OK;
+}
+
+static void
+gst_rtp_rtx_set_do_twcc (GstRtpRtxSend * rtx, gboolean do_twcc)
+{
+  if (!do_twcc && rtx->twcc_writer_probe_id) {
+    gst_pad_remove_probe (rtx->srcpad, rtx->twcc_writer_probe_id);
+  } else if (do_twcc) {
+    rtx->twcc_writer_probe_id = gst_pad_add_probe (rtx->srcpad,
+        GST_PAD_PROBE_TYPE_BUFFER, twcc_writer_probe_cb, rtx, NULL);
+  }
+
+  rtx->do_twcc = do_twcc;
 }
 
 
@@ -1393,6 +1482,13 @@ gst_rtp_rtx_send_set_property (GObject * object,
         gint max_burst = g_value_get_int (value);
         gst_rtp_rtx_send_stuffing_reset_bucket (rtx, rtx->stuffing_kbps,
             max_burst);
+      }
+      GST_OBJECT_UNLOCK (rtx);
+      break;
+    case PROP_DO_TWCC:
+      GST_OBJECT_LOCK (rtx);
+      {
+        gst_rtp_rtx_set_do_twcc (rtx, g_value_get_boolean (value));
       }
       GST_OBJECT_UNLOCK (rtx);
       break;

@@ -92,6 +92,12 @@ struct _GstRtpRtxSend
   gint stuffing_bucket_size;
   GstClockTime stuffing_prev_time;
   gint stuffing_max_packet_size;
+
+  /* twcc */
+  gboolean do_twcc;
+  guint8 twcc_ext_id;
+  guint16 twcc_seqnum;
+  gulong twcc_writer_probe_id;
 };
 
 struct _GstRtpRtxSendClass

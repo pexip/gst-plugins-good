@@ -1142,6 +1142,112 @@ GST_START_TEST (test_rtxsender_stuffing_does_not_interfer_with_rtx)
 
 GST_END_TEST;
 
+#define TWCC_EXTMAP_STR "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
+
+static GstBuffer *
+add_twcc_seqnum (GstBuffer * buf, guint seqnum, guint8 twcc_ext_id)
+{
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  buf = gst_buffer_make_writable (buf);
+
+  gst_rtp_buffer_map (buf, GST_MAP_READWRITE, &rtp);
+  if (twcc_ext_id > 0) {
+    guint16 data;
+    GST_WRITE_UINT16_BE (&data, seqnum);
+    gst_rtp_buffer_add_extension_onebyte_header (&rtp, twcc_ext_id,
+        &data, sizeof (guint16));
+  }
+  gst_rtp_buffer_unmap (&rtp);
+  return buf;
+}
+
+static gint32
+get_twcc_seqnum (GstBuffer * buf, guint8 ext_id)
+{
+  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
+  gint32 val = -1;
+  gpointer data;
+
+  gst_rtp_buffer_map (buf, GST_MAP_READ, &rtp);
+  if (gst_rtp_buffer_get_extension_onebyte_header (&rtp, ext_id,
+          0, &data, NULL)) {
+    val = GST_READ_UINT16_BE (data);
+  }
+  gst_rtp_buffer_unmap (&rtp);
+
+  return val;
+}
+
+GST_START_TEST (test_rtxsend_twcc_seqnum)
+{
+  const guint32 main_ssrc = 1234567;
+  const guint main_pt = 96;
+  const guint32 rtx_ssrc = 7654321;
+  const guint rtx_pt = 106;
+
+  GstHarness *h = gst_harness_new ("rtprtxsend");
+  GstStructure *ssrc_map =
+      create_rtx_map ("application/x-rtp-ssrc-map", main_ssrc, rtx_ssrc);
+  GstStructure *pt_map =
+      create_rtx_map ("application/x-rtp-pt-map", main_pt, rtx_pt);
+  GstBuffer *buf;
+  gint32 twcc_seqnum_base;
+
+  gst_harness_set_src_caps_str (h, "application/x-rtp, "
+      "clock-rate = (int)90000, extmap-5=" TWCC_EXTMAP_STR "");
+
+  g_object_set (h->element, "ssrc-map", ssrc_map, NULL);
+  g_object_set (h->element, "payload-type-map", pt_map, NULL);
+  g_object_set (h->element, "do-twcc", TRUE, NULL);
+
+  /* create a packet with TWCC seqnum */
+  buf = create_rtp_buffer (main_ssrc, main_pt, 0);
+  buf = add_twcc_seqnum (buf, 0, 5);
+  buf = gst_harness_push_and_pull (h, buf);
+
+  /* verify it got a seqnum on the way out as well */
+  twcc_seqnum_base = get_twcc_seqnum (buf, 5);
+  fail_unless (twcc_seqnum_base != -1);
+  gst_buffer_unref (buf);
+
+  /* now request this packet as rtx */
+  gst_harness_push_upstream_event (h, create_rtx_event (main_ssrc, main_pt, 0));
+
+  /* and verify the RTX packet follows suit with TWCC seqnum */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_int (twcc_seqnum_base + 1, get_twcc_seqnum (buf, 5));
+  gst_buffer_unref (buf);
+
+  /* push another packet */
+  buf = create_rtp_buffer (main_ssrc, main_pt, 1);
+  buf = add_twcc_seqnum (buf, 1, 5);
+  buf = gst_harness_push_and_pull (h, buf);
+
+  /* verify that falls in line as well */
+  fail_unless_equals_int (twcc_seqnum_base + 2, get_twcc_seqnum (buf, 5));
+  gst_buffer_unref (buf);
+
+  /* and now two more requests for RTX, first and second packet */
+  gst_harness_push_upstream_event (h, create_rtx_event (main_ssrc, main_pt, 0));
+  gst_harness_push_upstream_event (h, create_rtx_event (main_ssrc, main_pt, 1));
+
+  /* and check all is good */
+  buf = gst_harness_pull (h);
+  fail_unless_equals_int (twcc_seqnum_base + 3, get_twcc_seqnum (buf, 5));
+  gst_buffer_unref (buf);
+
+  buf = gst_harness_pull (h);
+  fail_unless_equals_int (twcc_seqnum_base + 4, get_twcc_seqnum (buf, 5));
+  gst_buffer_unref (buf);
+
+  gst_structure_free (ssrc_map);
+  gst_structure_free (pt_map);
+  gst_harness_teardown (h);
+}
+
+GST_END_TEST;
+
+
 static Suite *
 rtprtx_suite (void)
 {
@@ -1172,6 +1278,8 @@ rtprtx_suite (void)
   tcase_add_test (tc_chain,
       test_rtxsender_stuffing_sanity_when_input_rate_is_extreme);
   tcase_add_test (tc_chain, test_rtxsender_stuffing_does_not_interfer_with_rtx);
+
+  tcase_add_test (tc_chain, test_rtxsend_twcc_seqnum);
 
   return s;
 }
