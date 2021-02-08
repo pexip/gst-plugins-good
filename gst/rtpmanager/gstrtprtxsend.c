@@ -321,7 +321,7 @@ gst_rtp_rtx_send_reset (GstRtpRtxSend * rtx)
 static void
 gst_rtp_rtx_send_finalize (GObject * object)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (object);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (object);
 
   g_hash_table_unref (rtx->ssrc_data);
   g_hash_table_unref (rtx->rtx_ssrcs);
@@ -637,7 +637,7 @@ gst_rtp_rtx_send_token_bucket (GstRtpRtxSend * rtx, GstBuffer * buf)
 static gboolean
 gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (parent);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
   gboolean res;
 
   switch (GST_EVENT_TYPE (event)) {
@@ -782,7 +782,7 @@ gst_rtp_rtx_send_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 static gboolean
 gst_rtp_rtx_send_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (parent);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
 
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_FLUSH_START:
@@ -1104,7 +1104,7 @@ gst_rtp_rtx_send_push_out_and_stuff (GstRtpRtxSend * rtx, GstBuffer * buffer,
 static GstFlowReturn
 gst_rtp_rtx_send_chain (GstPad * pad, GstObject * parent, GstBuffer * buffer)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (parent);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
   GstFlowReturn ret;
 
   GST_OBJECT_LOCK (rtx);
@@ -1135,7 +1135,7 @@ static GstFlowReturn
 gst_rtp_rtx_send_chain_list (GstPad * pad, GstObject * parent,
     GstBufferList * list)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (parent);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
   GstFlowReturn ret;
 
   GST_OBJECT_LOCK (rtx);
@@ -1195,7 +1195,7 @@ static gboolean
 gst_rtp_rtx_send_activate_mode (GstPad * pad, GstObject * parent,
     GstPadMode mode, gboolean active)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (parent);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (parent);
   gboolean ret = FALSE;
 
   switch (mode) {
@@ -1217,7 +1217,7 @@ static void
 gst_rtp_rtx_send_get_property (GObject * object,
     guint prop_id, GValue * value, GParamSpec * pspec)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (object);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (object);
 
   switch (prop_id) {
     case PROP_PAYLOAD_TYPE_MAP:
@@ -1314,7 +1314,7 @@ static void
 gst_rtp_rtx_send_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec)
 {
-  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND (object);
+  GstRtpRtxSend *rtx = GST_RTP_RTX_SEND_CAST (object);
 
   switch (prop_id) {
     case PROP_SSRC_MAP:
@@ -1408,7 +1408,7 @@ gst_rtp_rtx_send_change_state (GstElement * element, GstStateChange transition)
   GstStateChangeReturn ret;
   GstRtpRtxSend *rtx;
 
-  rtx = GST_RTP_RTX_SEND (element);
+  rtx = GST_RTP_RTX_SEND_CAST (element);
 
   switch (transition) {
     default:
