@@ -812,7 +812,6 @@ rtp_session_init (RTPSession * sess)
   sess->last_rtcp_interval = GST_CLOCK_TIME_NONE;
 
   sess->next_early_rtcp_time = GST_CLOCK_TIME_NONE;
-  sess->next_twcc_rtcp_time = GST_CLOCK_TIME_NONE;
   sess->rtcp_feedback_retention_window = DEFAULT_RTCP_FEEDBACK_RETENTION_WINDOW;
   sess->rtcp_immediate_feedback_threshold =
       DEFAULT_RTCP_IMMEDIATE_FEEDBACK_THRESHOLD;
@@ -1288,7 +1287,6 @@ rtp_session_reset (RTPSession * sess)
   sess->last_rtcp_send_time = GST_CLOCK_TIME_NONE;
   sess->last_rtcp_interval = GST_CLOCK_TIME_NONE;
   sess->next_early_rtcp_time = GST_CLOCK_TIME_NONE;
-  sess->next_twcc_rtcp_time = GST_CLOCK_TIME_NONE;
   sess->scheduled_bye = FALSE;
 
   /* reset session stats */
@@ -3726,17 +3724,9 @@ rtp_session_next_timeout (RTPSession * sess, GstClockTime current_time)
   } else {
     if (sess->first_rtcp) {
       GST_DEBUG ("first RTCP packet");
-      /* We have yet to generate our first rtcp packet. Compute the initial
-       * interval when the next check time is changing. Otherwise, there is
-       * nothing to do (as the next check time is still in the future and
-       * computing a new interval will cause the first rtcp to be delayed).
-       * When interval-based TWCC is enabled, there can be multiple timeouts
-       * before the initial rtcp time (and thus, without this conditional,
-       * the initial rtcp will be delayed indefinitely). */
-      if (result != sess->next_rtcp_check_time) {
-        interval = calculate_rtcp_interval (sess, FALSE, TRUE);
-        sess->last_rtcp_interval = interval;
-      }
+      /* we are called for the first time */
+      interval = calculate_rtcp_interval (sess, FALSE, TRUE);
+      sess->last_rtcp_interval = interval;
     } else if (sess->next_rtcp_check_time < current_time) {
       GST_DEBUG ("old check time expired, getting new timeout");
       /* get a new timeout when we need to */
@@ -3770,20 +3760,6 @@ rtp_session_next_timeout (RTPSession * sess, GstClockTime current_time)
   sess->next_rtcp_check_time = result;
 
 early_exit:
-
-  sess->next_twcc_rtcp_time = rtp_twcc_manager_get_next_timeout (sess->twcc,
-      current_time);
-  if (GST_CLOCK_TIME_IS_VALID (sess->next_twcc_rtcp_time)) {
-    /* Take min(twcc-time, result) */
-    if (!GST_CLOCK_TIME_IS_VALID (result) ||
-        sess->next_twcc_rtcp_time < result) {
-      GST_DEBUG ("Using twcc time %" GST_TIME_FORMAT
-          " instead of %" GST_TIME_FORMAT,
-          GST_TIME_ARGS (sess->next_twcc_rtcp_time),
-          GST_TIME_ARGS (result));
-      result = sess->next_twcc_rtcp_time;
-    }
-  }
 
   GST_DEBUG ("current time: %" GST_TIME_FORMAT
       ", next time: %" GST_TIME_FORMAT,
@@ -4540,8 +4516,7 @@ generate_twcc (const gchar * key, RTPSource * source, ReportData * data)
     return;
   }
 
-  while ((buf = rtp_twcc_manager_get_feedback (sess->twcc, source->ssrc,
-      data->current_time))) {
+  while ((buf = rtp_twcc_manager_get_feedback (sess->twcc, source->ssrc))) {
     ReportOutput *output = g_slice_new (ReportOutput);
     output->source = g_object_ref (source);
     output->is_bye = FALSE;
@@ -4767,22 +4742,6 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   /* update point-to-point status */
   session_update_ptp (sess);
 
-  /* generate interval-based twcc feedback */
-  if (GST_CLOCK_TIME_IS_VALID (
-      rtp_twcc_manager_get_feedback_interval (sess->twcc))) {
-    GST_DEBUG ("interval-based twcc. now: %" GST_TIME_FORMAT
-        " twcc-time: %" GST_TIME_FORMAT,
-        GST_TIME_ARGS (current_time),
-        GST_TIME_ARGS (sess->next_twcc_rtcp_time));
-    if (GST_CLOCK_TIME_IS_VALID (sess->next_twcc_rtcp_time) &&
-        sess->next_twcc_rtcp_time <= current_time) {
-      GST_DEBUG ("generating twcc");
-      g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-          (GHFunc) generate_twcc, &data);
-      sess->next_twcc_rtcp_time = GST_CLOCK_TIME_NONE;
-    }
-  }
-
   /* see if we need to generate SR or RR packets */
   if (!is_rtcp_time (sess, current_time, &data))
     goto done;
@@ -4798,13 +4757,8 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
       (GHFunc) generate_rtcp, &data);
 
-  /* add twcc feedback if not using interval-based feedback */
-  if (!GST_CLOCK_TIME_IS_VALID (
-      rtp_twcc_manager_get_feedback_interval (sess->twcc))) {
-    GST_DEBUG("generating irregular twcc");
-    g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
-        (GHFunc) generate_twcc, &data);
-  }
+  g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
+      (GHFunc) generate_twcc, &data);
 
   /* update the generation for all the sources that have been reported */
   g_hash_table_foreach (sess->ssrcs[sess->mask_idx],
