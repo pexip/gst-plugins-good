@@ -189,17 +189,15 @@ picture_id_compare (guint16 id0, guint16 id1)
 static void
 send_last_lost_event (GstRtpVP8Depay * self)
 {
-  if (self->last_lost_event) {
-    GST_DEBUG_OBJECT (self,
-        "Sending the last stopped lost event: %" GST_PTR_FORMAT,
-        self->last_lost_event);
-    GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
-        ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
-        self->last_lost_event);
-    gst_event_unref (self->last_lost_event);
-    self->last_lost_event = NULL;
-    self->last_pushed_was_lost_event = TRUE;
-  }
+  GST_DEBUG_OBJECT (self,
+      "Sending the last stopped lost event: %" GST_PTR_FORMAT,
+      self->last_lost_event);
+  GST_RTP_BASE_DEPAYLOAD_CLASS (gst_rtp_vp8_depay_parent_class)
+      ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self),
+      self->last_lost_event);
+  gst_event_unref (self->last_lost_event);
+  self->last_lost_event = NULL;
+  self->last_pushed_was_lost_event = TRUE;
 }
 
 static void
@@ -229,6 +227,7 @@ send_new_lost_event (GstRtpVP8Depay * self, GstClockTime timestamp,
     ->packet_lost (GST_RTP_BASE_DEPAYLOAD_CAST (self), event);
 
   gst_event_unref (event);
+  self->last_pushed_was_lost_event = TRUE;
 }
 
 static void
@@ -269,6 +268,7 @@ send_lost_event_if_needed (GstRtpVP8Depay * self, guint new_picture_id,
       // If we forward last received lost event, there is no need
       // to create another one
       create_lost_event = FALSE;
+      self->last_pushed_was_lost_event = TRUE;
     }
     gst_event_unref (self->last_lost_event);
     self->last_lost_event = NULL;
@@ -294,10 +294,17 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
   guint part_id;
   gboolean frame_start;
   gboolean sent_lost_event = FALSE;
+  gboolean prev_frame_is_dropped = FALSE;
 
   if (G_UNLIKELY (GST_BUFFER_IS_DISCONT (rtp->buffer))) {
     GST_DEBUG_OBJECT (self, "Discontinuity, flushing adapter");
     gst_adapter_clear (self->adapter);
+
+    // self->started is true means
+    // we have a frame data in adapter.
+    // Cleanning this data means we
+    // introduce the gap in frame flow.
+    prev_frame_is_dropped = self->started;
     self->started = FALSE;
 
     if (self->wait_for_keyframe)
@@ -358,8 +365,13 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
     goto too_small;
 
   frame_start = (s_bit == 1) && (part_id == 0);
+
+  // Detected the start of a new frame
   if (frame_start) {
     if (G_UNLIKELY (self->started)) {
+      // If we still in a state of self->started == true
+      // that means we never saw the end of the frame.
+      // So this case is considered to be a GAP (incomlete frame)
       GST_DEBUG_OBJECT (depay, "Incomplete frame, flushing adapter");
       gst_adapter_clear (self->adapter);
       self->started = FALSE;
@@ -369,16 +381,38 @@ gst_rtp_vp8_depay_process (GstRTPBaseDepayload * depay, GstRTPBuffer * rtp)
           "Incomplete frame detected");
       sent_lost_event = TRUE;
     }
+    else if (G_UNLIKELY (prev_frame_is_dropped && !self->last_pushed_was_lost_event)) {
+      // We has droped the previous frmae due to DISCONT flag in
+      // the current packet. We need to send the lost event if it hasn't
+      // been send already (by jitterbuffer)
+      /* FIXME: Add property to control whether to send GAP events */
+      send_new_lost_event (self, GST_BUFFER_PTS (rtp->buffer), picture_id,
+          "Incomplete frame detected");
+      sent_lost_event = TRUE;
+    }
   }
 
+  // Wating for start of the new frame
   if (!self->started) {
     if (G_UNLIKELY (!frame_start)) {
-      GST_DEBUG_OBJECT (depay,
-          "The frame is missing the first packet, ignoring the packet");
-      if (self->stop_lost_events && !sent_lost_event) {
-        send_last_lost_event (self);
+      // If the current packet is not the start of the
+      // frame ignoring this packets.
+      if (prev_frame_is_dropped
+          && !self->last_pushed_was_lost_event && !sent_lost_event) {
+        // But we need to send GAP event if the previous
+        // frame was actually dropped and the event
+        // has never been sent for some reasons.
+        if (self->last_lost_event) {
+          send_last_lost_event (self);
+        } else {
+          /* FIXME: Add property to control whether to send GAP events */
+          send_new_lost_event (self, GST_BUFFER_PTS (rtp->buffer), picture_id,
+              "Incomplete frame detected");
+        }
         self->stop_lost_events = FALSE;
       }
+      GST_DEBUG_OBJECT (depay,
+          "The frame is missing the first packet, ignoring the packet");
       goto done;
     }
 
@@ -478,6 +512,11 @@ done:
 too_small:
   GST_DEBUG_OBJECT (self, "Invalid rtp packet (too small), ignoring");
   gst_adapter_clear (self->adapter);
+  if (self->started) {
+    /* FIXME: Add property to control whether to send GAP events */
+    send_new_lost_event (self, GST_BUFFER_PTS (rtp->buffer), picture_id,
+        "Invalid rtp packet detected");
+  }
   self->started = FALSE;
 
   goto done;
