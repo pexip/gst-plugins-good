@@ -63,8 +63,6 @@ void rtp_twcc_manager_set_mtu (RTPTWCCManager * twcc, guint mtu);
 void rtp_twcc_manager_set_feedback_interval (RTPTWCCManager * twcc,
     GstClockTime feedback_interval);
 GstClockTime rtp_twcc_manager_get_feedback_interval (RTPTWCCManager * twcc);
-GstClockTime rtp_twcc_manager_get_next_timeout (RTPTWCCManager * twcc,
-    GstClockTime current_time);
 
 gboolean rtp_twcc_manager_recv_packet (RTPTWCCManager * twcc,
     RTPPacketInfo * pinfo);
@@ -72,7 +70,7 @@ void rtp_twcc_manager_send_packet (RTPTWCCManager * twcc,
     RTPPacketInfo * pinfo);
 
 GstBuffer * rtp_twcc_manager_get_feedback (RTPTWCCManager * twcc,
-    guint32 sender_ssrc, GstClockTime current_time);
+    guint32 sender_ssrc);
 
 GArray * rtp_twcc_manager_parse_fci (RTPTWCCManager * twcc,
     guint8 * fci_data, guint fci_length);
