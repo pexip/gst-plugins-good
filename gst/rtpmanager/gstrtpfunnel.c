@@ -53,13 +53,6 @@
  * RTP funnel can than make sure that this event hits the right encoder based
  * on the SSRC embedded in the event.
  *
- * Another feature of the RTP funnel is that it will mux together TWCC
- * (Transport-Wide Congestion Control) sequence-numbers. The point being that
- * it should increment "transport-wide", meaning potentially several
- * bundled streams. Note that not *all* streams being bundled needs to be
- * affected by this. As an example Google WebRTC will use bundle with audio
- * and video, but will only use TWCC sequence-numbers for the video-stream(s).
- *
  */
 
 #ifdef HAVE_CONFIG_H
@@ -86,7 +79,6 @@ struct _GstRtpFunnelPad
 {
   GstPad pad;
   guint32 ssrc;
-  gboolean has_twcc;
   GstRTPBufferFlags buffer_flag;
   GstClockTime us_latency;
   gboolean has_latency;
@@ -180,8 +172,6 @@ struct _GstRtpFunnel
   GstPad *current_pad;
 
   guint8 twcc_ext_id;           /* the negotiated twcc extmap id */
-  guint16 twcc_seqnum;          /* our internal twcc seqnum */
-  guint twcc_pads;              /* numer of sinkpads with negotiated twcc */
 
   /* properties */
   gint common_ts_offset;
@@ -254,43 +244,6 @@ done:
   return;
 }
 
-static void
-gst_rtp_funnel_set_twcc_seqnum (GstRtpFunnel * funnel,
-    GstPad * pad, GstBuffer ** buf)
-{
-  GstRtpFunnelPad *fpad = GST_RTP_FUNNEL_PAD_CAST (pad);
-  GstRTPBuffer rtp = GST_RTP_BUFFER_INIT;
-
-  if (!funnel->twcc_ext_id || !fpad->has_twcc)
-    return;
-
-  *buf = gst_buffer_make_writable (*buf);
-
-  if (gst_rtp_buffer_map (*buf, GST_MAP_READWRITE, &rtp)) {
-    gpointer data;
-
-    /* if there already is a twcc-seqnum inside the packet */
-    if (gst_rtp_buffer_get_extension_onebyte_header (&rtp, funnel->twcc_ext_id,
-            0, &data, NULL)) {
-
-      /* with only one pad, we read the twcc-seqnum instead of writing it */
-      if (funnel->twcc_pads == 1) {
-        funnel->twcc_seqnum = GST_READ_UINT16_BE (data);
-      } else {
-        GST_WRITE_UINT16_BE (data, funnel->twcc_seqnum);
-      }
-    } else {
-      guint16 seq_be;
-      GST_WRITE_UINT16_BE (&seq_be, funnel->twcc_seqnum);
-      gst_rtp_buffer_add_extension_onebyte_header (&rtp, funnel->twcc_ext_id,
-          &seq_be, 2);
-    }
-  }
-  gst_rtp_buffer_unmap (&rtp);
-
-  funnel->twcc_seqnum++;
-}
-
 static GstFlowReturn
 gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
     gboolean is_list, GstMiniObject * obj)
@@ -313,7 +266,6 @@ gst_rtp_funnel_sink_chain_object (GstPad * pad, GstRtpFunnel * funnel,
     res = gst_pad_push_list (funnel->srcpad, GST_BUFFER_LIST_CAST (obj));
   } else {
     GstBuffer *buf = GST_BUFFER_CAST (obj);
-    gst_rtp_funnel_set_twcc_seqnum (funnel, pad, &buf);
     gst_rtp_funnel_pad_set_buffer_flag (fpad, buf);
     GST_BUFFER_PTS (buf) += fpad->us_latency;
     res = gst_pad_push (funnel->srcpad, buf);
@@ -480,8 +432,6 @@ gst_rtp_funnel_sink_event (GstPad * pad, GstObject * parent, GstEvent * event)
       }
       ext_id = _get_extmap_id_for_attribute (s, TWCC_EXTMAP_STR);
       if (ext_id > 0) {
-        fpad->has_twcc = TRUE;
-        funnel->twcc_pads++;
         gst_rtp_funnel_set_twcc_ext_id (funnel, ext_id);
       }
       gst_rtp_funnel_pad_set_media_type (fpad, s);
