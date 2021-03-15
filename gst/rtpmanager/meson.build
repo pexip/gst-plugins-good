@@ -17,6 +17,7 @@ rtpmanager_sources = [
   'rtptwcc.c',
   'gstrtpsession.c',
   'gstrtpfunnel.c',
+  'tokenbucket.c',
 ]
 
 gstrtpmanager = library('gstrtpmanager',
