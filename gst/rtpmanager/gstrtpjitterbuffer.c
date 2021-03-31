@@ -2560,29 +2560,24 @@ gst_rtp_jitter_buffer_handle_missing_packets (GstRtpJitterBuffer * jitterbuffer,
     /* if we had a timer for the first missing packet, update it. */
     if (timer && timer->type == RTP_TIMER_EXPECTED) {
       GstClockTime timeout = timer->timeout;
-      GstClockTime delay = MAX (rtx_delay, pts - est_pts);
 
       timer->duration = est_pkt_duration;
-      if (timeout > (est_pts + delay) && timer->num_rtx_retry == 0) {
+      if (timeout > (est_pts + rtx_delay) && timer->num_rtx_retry == 0) {
         rtp_timer_queue_update_timer (priv->timers, timer, timer->seqnum,
-            est_pts, delay, 0, TRUE);
+            est_pts, rtx_delay, 0, TRUE);
       }
       missing_seqnum++;
       est_pts += est_pkt_duration;
     }
 
     while (gst_rtp_buffer_compare_seqnum (missing_seqnum, current_seqnum) > 0) {
-      /* minimum delay the expected-timer has "waited" is the elapsed time
-       * since expected arrival of the missing packet */
-      GstClockTime delay = MAX (rtx_delay, pts - est_pts);
-
       GST_DEBUG_OBJECT (jitterbuffer, "Add RTX timer(s) #%u/#%u, "
           "estimated pts %" GST_TIME_FORMAT ", delay %" GST_TIME_FORMAT
           ", est duration %" GST_TIME_FORMAT,
           missing_seqnum, current_seqnum - 1, GST_TIME_ARGS (est_pts),
-          GST_TIME_ARGS (delay), GST_TIME_ARGS (est_pkt_duration));
+          GST_TIME_ARGS (rtx_delay), GST_TIME_ARGS (est_pkt_duration));
       rtp_timer_queue_set_expected (priv->timers, missing_seqnum, est_pts,
-          delay, est_pkt_duration);
+          rtx_delay, est_pkt_duration);
       est_pts += est_pkt_duration;
       missing_seqnum++;
     }

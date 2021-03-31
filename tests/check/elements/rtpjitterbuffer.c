@@ -1761,8 +1761,7 @@ GST_START_TEST (test_rtx_duplicate_packet_updates_rtx_stats)
   gint latency_ms = 100;
   gint next_seqnum;
   GstClockTime now, rtx_request_6, rtx_request_7;
-  gint rtx_delay_ms_0 = TEST_BUF_MS / 2;
-  gint rtx_delay_ms_1 = TEST_BUF_MS;
+  gint rtx_delay_ms = TEST_BUF_MS / 2;
   gint i;
 
   g_object_set (h->element, "do-retransmission", TRUE, NULL);
@@ -1776,17 +1775,17 @@ GST_START_TEST (test_rtx_duplicate_packet_updates_rtx_stats)
   /* Wait for NACKs on 6 and 7 */
   gst_harness_crank_single_clock_wait (h);
   verify_rtx_event (h, 6, 6 * TEST_BUF_DURATION,
-      rtx_delay_ms_0, TEST_BUF_DURATION);
+      rtx_delay_ms, TEST_BUF_DURATION);
   rtx_request_6 = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
   fail_unless_equals_int64 (rtx_request_6,
-      6 * TEST_BUF_DURATION + rtx_delay_ms_0 * GST_MSECOND);
+      6 * TEST_BUF_DURATION + rtx_delay_ms * GST_MSECOND);
 
   gst_harness_crank_single_clock_wait (h);
   verify_rtx_event (h,
-      7, 7 * TEST_BUF_DURATION, rtx_delay_ms_1, TEST_BUF_DURATION);
+      7, 7 * TEST_BUF_DURATION, rtx_delay_ms, TEST_BUF_DURATION);
   rtx_request_7 = gst_clock_get_time (GST_ELEMENT_CLOCK (h->element));
   fail_unless_equals_int64 (rtx_request_7,
-      7 * TEST_BUF_DURATION + rtx_delay_ms_1 * GST_MSECOND);
+      7 * TEST_BUF_DURATION + rtx_delay_ms * GST_MSECOND);
 
   /* Original packet 7 arrives */
   now = 161 * GST_MSECOND;
