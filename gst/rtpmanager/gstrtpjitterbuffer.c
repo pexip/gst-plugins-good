@@ -2356,7 +2356,7 @@ update_rtx_timers (GstRtpJitterBuffer * jitterbuffer, guint16 seqnum,
 
     /* and update/install timer for next seqnum */
     GST_DEBUG_OBJECT (jitterbuffer, "Add RTX timer #%d, next_expected_pts %"
-        GST_TIME_FORMAT ", delay %" GST_TIME_FORMAT ", packet-spacing %"
+        GST_TIME_FORMAT ", delay %" GST_TIME_FORMAT ", est packet duration %"
         GST_TIME_FORMAT ", jitter %" GST_TIME_FORMAT, priv->next_in_seqnum,
         GST_TIME_ARGS (next_expected_pts), GST_TIME_ARGS (delay),
         GST_TIME_ARGS (priv->packet_spacing), GST_TIME_ARGS (priv->avg_jitter));
@@ -2575,6 +2575,12 @@ gst_rtp_jitter_buffer_handle_missing_packets (GstRtpJitterBuffer * jitterbuffer,
       /* minimum delay the expected-timer has "waited" is the elapsed time
        * since expected arrival of the missing packet */
       GstClockTime delay = MAX (rtx_delay, pts - est_pts);
+
+      GST_DEBUG_OBJECT (jitterbuffer, "Add RTX timer(s) #%u/#%u, "
+          "estimated pts %" GST_TIME_FORMAT ", delay %" GST_TIME_FORMAT
+          ", est duration %" GST_TIME_FORMAT,
+          missing_seqnum, current_seqnum - 1, GST_TIME_ARGS (est_pts),
+          GST_TIME_ARGS (delay), GST_TIME_ARGS (est_pkt_duration));
       rtp_timer_queue_set_expected (priv->timers, missing_seqnum, est_pts,
           delay, est_pkt_duration);
       est_pts += est_pkt_duration;
@@ -3970,7 +3976,7 @@ do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
   GstClockTimeDiff offset = 0;
   GstClockTime timeout;
 
-  GST_DEBUG_OBJECT (jitterbuffer, "expected %d didn't arrive, now %"
+  GST_DEBUG_OBJECT (jitterbuffer, "expected #%d didn't arrive, now %"
       GST_TIME_FORMAT, timer->seqnum, GST_TIME_ARGS (now));
 
   rtx_retry_timeout = get_rtx_retry_timeout (priv);
@@ -4029,13 +4035,14 @@ do_expected_timeout (GstRtpJitterBuffer * jitterbuffer, RtpTimer * timer,
   if ((priv->rtx_max_retries != -1
           && timer->num_rtx_retry >= priv->rtx_max_retries)
       || (timeout > timer->rtx_base + rtx_retry_period)) {
-    GST_DEBUG_OBJECT (jitterbuffer, "reschedule #%i as LOST timer",
-        timer->seqnum);
     /* too many retransmission request, we now convert the timer
      * to a lost timer, leave the num_rtx_retry as it is for stats */
     timer->type = RTP_TIMER_LOST;
     timeout = timer->rtx_base;
     offset = timeout_offset (jitterbuffer);
+    GST_DEBUG_OBJECT (jitterbuffer, "reschedule #%i as LOST timer for %"
+        GST_TIME_FORMAT, timer->seqnum,
+        GST_TIME_ARGS (timer->rtx_base + offset));
   }
   rtp_timer_queue_update_timer (priv->timers, timer, timer->seqnum,
       timeout, 0, offset, FALSE);
