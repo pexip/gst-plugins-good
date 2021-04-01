@@ -5682,6 +5682,43 @@ GST_START_TEST (test_rtcp_timing_with_twcc_feedback_interval)
 
 GST_END_TEST;
 
+
+static void
+set_min_rtcp_interval_on_new_sender_ssrc (GObject * session,
+    G_GNUC_UNUSED GObject * source)
+{
+  /* The value is irrelevant here: we want the side-effect of
+   * causing next_rtcp_check_time to be modified */
+  g_object_set (session, "rtcp-min-interval", 5 * GST_SECOND, NULL);
+}
+
+GST_START_TEST (test_twcc_feedback_interval_new_internal_source)
+{
+  SessionHarness *h = session_harness_new ();
+  GstBuffer *buf;
+
+  g_object_set (h->internal_session,
+      "twcc-feedback-interval", 50 * GST_MSECOND, NULL);
+
+  g_object_set (h->internal_session, "internal-ssrc", 0xDEADBEEF, NULL);
+  g_signal_connect (h->internal_session, "on-new-sender-ssrc",
+      G_CALLBACK (set_min_rtcp_interval_on_new_sender_ssrc), NULL);
+
+  /* Receive a RTP buffer from the wire */
+  fail_unless_equals_int (GST_FLOW_OK,
+      session_harness_recv_rtp (h, generate_test_buffer (0, 0x12345678)));
+
+  /* Wait for first regular RTCP to be sent */
+  session_harness_produce_rtcp (h, 1);
+  buf = session_harness_pull_rtcp (h);
+  fail_unless (gst_rtcp_buffer_validate (buf));
+  gst_buffer_unref (buf);
+
+  session_harness_free (h);
+}
+GST_END_TEST;
+
+
 GST_START_TEST (test_twcc_feedback_count_wrap)
 {
   SessionHarness *h = session_harness_new ();
@@ -5996,6 +6033,7 @@ rtpsession_suite (void)
   tcase_add_loop_test (tc_chain, test_twcc_feedback_interval, 0,
       G_N_ELEMENTS (test_twcc_feedback_interval_ctx));
   tcase_add_test (tc_chain, test_rtcp_timing_with_twcc_feedback_interval);
+  tcase_add_test (tc_chain, test_twcc_feedback_interval_new_internal_source);
   tcase_add_test (tc_chain, test_twcc_feedback_count_wrap);
   tcase_add_test (tc_chain, test_twcc_feedback_old_seqnum);
 
