@@ -4681,7 +4681,6 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
   g_queue_init (&data.output);
 
   RTP_SESSION_LOCK (sess);
-  twcc_only = awoken_for_twcc (sess, current_time);
 
   /* get a new interval, we need this for various cleanups etc */
   data.interval = calculate_rtcp_interval (sess, TRUE, sess->first_rtcp);
@@ -4702,6 +4701,8 @@ rtp_session_on_timeout (RTPSession * sess, GstClockTime current_time,
 
     g_object_unref (source);
   }
+
+  twcc_only = awoken_for_twcc (sess, current_time);
 
   if (!twcc_only) {
     sess->conflicting_addresses =
