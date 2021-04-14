@@ -905,7 +905,7 @@ rtp_twcc_manager_send_packet (RTPTWCCManager * twcc, RTPPacketInfo * pinfo)
 
   gst_buffer_add_tx_feedback_meta (pinfo->data, seqnum, GST_TX_FEEDBACK (twcc));
 
-  GST_WARNING ("Send: twcc-seqnum: %u, pt: %u, marker: %d, ts: %"
+  GST_LOG ("Send: twcc-seqnum: %u, pt: %u, marker: %d, ts: %"
       GST_TIME_FORMAT, seqnum, pinfo->pt, pinfo->marker,
       GST_TIME_ARGS (pinfo->current_time));
 }
