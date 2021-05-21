@@ -83,6 +83,10 @@ GST_STATIC_PAD_TEMPLATE ("rtcp_src_%u",
 #define INTERNAL_STREAM_LOCK(obj)   (g_rec_mutex_lock (&(obj)->padlock))
 #define INTERNAL_STREAM_UNLOCK(obj) (g_rec_mutex_unlock (&(obj)->padlock))
 
+#define GST_PAD_FLAG_INITIAL_STICKIES (GST_PAD_FLAG_LAST << 0)
+#define GST_PAD_HAS_INITIAL_STICKIES(pad)  (GST_OBJECT_FLAG_IS_SET (pad, GST_PAD_FLAG_INITIAL_STICKIES))
+#define GST_PAD_SET_INITIAL_STICKIES(pad) (GST_OBJECT_FLAG_SET (pad, GST_PAD_FLAG_INITIAL_STICKIES))
+
 typedef enum
 {
   RTP_PAD,
@@ -242,13 +246,11 @@ forward_sticky_events (GstPad * pad, GstEvent ** event, gpointer user_data)
   GstEvent *newevent;
 
   newevent = add_ssrc_and_ref (*event, data->ssrc);
-
   gst_pad_push_event (data->pad, newevent);
 
   return TRUE;
 }
 
-/* With internal stream lock held */
 static void
 forward_initial_events (GstRtpSsrcDemux * demux, guint32 ssrc, GstPad * pad,
     PadType padtype)
@@ -316,9 +318,6 @@ find_or_create_demux_pad_for_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc,
   dpads->rtp_pad = rtp_pad;
   dpads->rtcp_pad = rtcp_pad;
 
-  gst_pad_set_element_private (rtp_pad, dpads);
-  gst_pad_set_element_private (rtcp_pad, dpads);
-
   GST_OBJECT_LOCK (demux);
   demux->srcpads = g_slist_prepend (demux->srcpads, dpads);
   GST_OBJECT_UNLOCK (demux);
@@ -335,9 +334,6 @@ find_or_create_demux_pad_for_ssrc (GstRtpSsrcDemux * demux, guint32 ssrc,
       gst_rtp_ssrc_demux_iterate_internal_links_src);
   gst_pad_use_fixed_caps (rtcp_pad);
   gst_pad_set_active (rtcp_pad, TRUE);
-
-  forward_initial_events (demux, ssrc, rtp_pad, RTP_PAD);
-  forward_initial_events (demux, ssrc, rtcp_pad, RTCP_PAD);
 
   gst_element_add_pad (GST_ELEMENT_CAST (demux), rtp_pad);
   gst_element_add_pad (GST_ELEMENT_CAST (demux), rtcp_pad);
@@ -604,6 +600,13 @@ forward_event (GstPad * pad, gpointer user_data)
   GSList *walk = NULL;
   GstEvent *newevent = NULL;
 
+  /* special case for EOS */
+  if (GST_EVENT_TYPE (fdata->event) == GST_EVENT_EOS)
+    GST_PAD_SET_INITIAL_STICKIES (pad);
+
+  if (GST_EVENT_IS_STICKY (fdata->event) && !GST_PAD_HAS_INITIAL_STICKIES (pad))
+    return FALSE;
+
   GST_OBJECT_LOCK (fdata->demux);
   for (walk = fdata->demux->srcpads; walk; walk = walk->next) {
     GstRtpSsrcDemuxPads *dpads = (GstRtpSsrcDemuxPads *) walk->data;
@@ -665,6 +668,11 @@ gst_rtp_ssrc_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   srcpad = find_or_create_demux_pad_for_ssrc (demux, ssrc, RTP_PAD);
   if (srcpad == NULL)
     goto create_failed;
+
+  if (!GST_PAD_HAS_INITIAL_STICKIES (srcpad)) {
+    forward_initial_events (demux, ssrc, srcpad, RTP_PAD);
+    GST_PAD_SET_INITIAL_STICKIES (srcpad);
+  }
 
   /* push to srcpad */
   ret = gst_pad_push (srcpad, buf);
@@ -757,6 +765,11 @@ gst_rtp_ssrc_demux_rtcp_chain (GstPad * pad, GstObject * parent,
   srcpad = find_or_create_demux_pad_for_ssrc (demux, ssrc, RTCP_PAD);
   if (srcpad == NULL)
     goto create_failed;
+
+  if (!GST_PAD_HAS_INITIAL_STICKIES (srcpad)) {
+    forward_initial_events (demux, ssrc, srcpad, RTCP_PAD);
+    GST_PAD_SET_INITIAL_STICKIES (srcpad);
+  }
 
   /* push to srcpad */
   ret = gst_pad_push (srcpad, buf);
@@ -944,16 +957,11 @@ gst_rtp_ssrc_demux_src_query (GstPad * pad, GstObject * parent,
       if ((res = gst_pad_peer_query (demux->rtp_sink, query))) {
         gboolean live;
         GstClockTime min_latency, max_latency;
-        GstRtpSsrcDemuxPads *dpads;
-
-        dpads = gst_pad_get_element_private (pad);
 
         gst_query_parse_latency (query, &live, &min_latency, &max_latency);
 
-        GST_DEBUG_OBJECT (demux, "peer min latency %" GST_TIME_FORMAT,
+        GST_DEBUG_OBJECT (pad, "peer min latency %" GST_TIME_FORMAT,
             GST_TIME_ARGS (min_latency));
-
-        GST_DEBUG_OBJECT (demux, "latency for SSRC %08x", dpads->ssrc);
 
         gst_query_set_latency (query, live, min_latency, max_latency);
       }
