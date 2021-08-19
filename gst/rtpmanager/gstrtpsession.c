@@ -1206,6 +1206,7 @@ rtcp_thread (GstRtpSession * rtpsession)
       GST_TIME_ARGS (current_time));
   session->start_time = current_time;
 
+  rtpsession->priv->id = id = NULL;
   while (!rtpsession->priv->stop_thread) {
     GstClockReturn res;
 
@@ -1219,14 +1220,31 @@ rtcp_thread (GstRtpSession * rtpsession)
     if (next_timeout == GST_CLOCK_TIME_NONE)
       break;
 
-    id = rtpsession->priv->id =
-        gst_clock_new_single_shot_id (sysclock, next_timeout);
+    if (id == NULL)
+    {
+        id = rtpsession->priv->id =
+            gst_clock_new_single_shot_id (sysclock, next_timeout);
+    }
+    else
+    {
+
+        gboolean res = gst_clock_single_shot_id_reinit (sysclock, id, next_timeout);
+        if (res)
+        {
+             rtpsession->priv->id = id;
+        }
+        else
+        {
+            gst_clock_id_unref (id);
+            id = rtpsession->priv->id =
+                gst_clock_new_single_shot_id (sysclock, next_timeout);
+        }
+    }
     GST_RTP_SESSION_UNLOCK (rtpsession);
 
     res = gst_clock_id_wait (id, NULL);
 
     GST_RTP_SESSION_LOCK (rtpsession);
-    gst_clock_id_unref (id);
     rtpsession->priv->id = NULL;
 
     if (rtpsession->priv->stop_thread)
@@ -1248,6 +1266,12 @@ rtcp_thread (GstRtpSession * rtpsession)
     rtp_session_on_timeout (session, current_time, ntpnstime, running_time);
     GST_RTP_SESSION_LOCK (rtpsession);
   }
+  if (id != NULL)
+  {
+    gst_clock_id_unref (id);
+    id = rtpsession->priv->id = NULL;
+  }
+
   /* mark the thread as stopped now */
   rtpsession->priv->thread_stopped = TRUE;
   GST_RTP_SESSION_UNLOCK (rtpsession);
